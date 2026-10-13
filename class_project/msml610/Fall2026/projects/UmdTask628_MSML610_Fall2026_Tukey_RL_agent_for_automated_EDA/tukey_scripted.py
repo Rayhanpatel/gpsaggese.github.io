@@ -161,8 +161,10 @@ class ScriptedExpert:
             - "index": the prototype's (pairs i < j in lexicographic order,
               conditioning variables in increasing index)
             - "strength": pairs by decreasing `|r|`, conditioning variables k
-              by decreasing `max(|r_ik|, |r_jk|)`, ties by index; the
-              behaviour-cloning teacher, since a policy sees no column indices
+              by decreasing `max(|r_ik|, |r_jk|)`, and first the regression of
+              the endpoint with the larger mean `|r|`, ties by index; the
+              behaviour-cloning teacher, since a policy sees no column
+              indices
         """
         hdbg.dassert_in(order, ("index", "strength"))
         self.threshold = threshold
@@ -198,6 +200,30 @@ class ScriptedExpert:
         actions = [ttools.ci_test_action(i, j, (k,)) for k in others]
         return actions
 
+    def _regress_actions(
+        self, evidence: ttools.Evidence, i: int, j: int
+    ) -> List[ttools.Action]:
+        """
+        List the pair's two regressions in the rule's order.
+
+        :param evidence: evidence so far
+        :param i: lower-index variable
+        :param j: higher-index variable
+        :return: `regress` actions (j on i, i on j, in the prototype's order)
+        """
+        actions = [
+            ttools.regress_action(j, (i,)),
+            ttools.regress_action(i, (j,)),
+        ]
+        if self.order == "strength":
+            # First regress the endpoint with the larger mean |r| to the other
+            # variables (the node feature `mean_abs_r`; the pair's own |r| is
+            # shared, so this compares the endpoints' links to third variables).
+            corr = np.abs(evidence.corr)
+            mean_abs_r = (corr.sum(axis=1) - 1.0) / max(1, evidence.n_nodes - 1)
+            actions.sort(key=lambda a: (-mean_abs_r[a.args[0]], a.args[0]))
+        return actions
+
     def _next_pair_action(
         self, evidence: ttools.Evidence, i: int, j: int
     ) -> Optional[ttools.Action]:
@@ -216,10 +242,7 @@ class ScriptedExpert:
             if abs(result["pcorr"]) < self.threshold:
                 # Removed: no orientation needed.
                 return None
-        for action in (
-            ttools.regress_action(j, (i,)),
-            ttools.regress_action(i, (j,)),
-        ):
+        for action in self._regress_actions(evidence, i, j):
             if action not in evidence.results:
                 return action
         return None

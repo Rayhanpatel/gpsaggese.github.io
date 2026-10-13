@@ -44,6 +44,45 @@ def _play(
     return evidence, actions
 
 
+def _relabel(action: ttools.Action, new_index: List[int]) -> ttools.Action:
+    """
+    Rewrite an action for relabelled variables.
+
+    :param action: action on the original labels
+    :param new_index: `new_index[v]` is the new label of variable v
+    :return: the same call on the new labels, canonicalized
+    """
+    args = [int(new_index[v]) for v in action.args]
+    if action.kind == ttools.CI_TEST:
+        return ttools.ci_test_action(args[0], args[1], tuple(args[2:]))
+    if action.kind == ttools.REGRESS:
+        return ttools.regress_action(args[0], tuple(args[1:]))
+    if action.kind == ttools.LINGAM_DIR:
+        return ttools.Action(ttools.LINGAM_DIR, tuple(sorted(args)))
+    return ttools.Action(action.kind, tuple(args))
+
+
+def _expert_calls(
+    expert: tscrip.ScriptedExpert, x: np.ndarray, *, budget: int
+) -> List[ttools.Action]:
+    """
+    Record the expert's calls on a dataset.
+
+    :param expert: scripted expert
+    :param x: training rows
+    :param budget: tool budget
+    :return: calls in order
+    """
+    evidence = ttools.Evidence(ttools.ToolCache(x), budget=budget)
+    calls = []
+    while True:
+        action = expert.next_action(evidence)
+        if action.kind == ttools.STOP:
+            return calls
+        evidence.record(action)
+        calls.append(action)
+
+
 # #############################################################################
 # Test_ScriptedExpert
 # #############################################################################
@@ -111,6 +150,28 @@ class Test_ScriptedExpert(hunitest.TestCase):
         _, actions2 = _play(tenv.TukeyEnv(cfg, budget=1000), expert, 3)
         self.assertEqual(actions1, actions2)
         self.assertEqual(len(set(actions1)), len(actions1))
+
+    def test5(self) -> None:
+        """
+        Strength order: relabelling the columns relabels the whole trajectory.
+        """
+        cfg = tenv.GraphConfig(family="linear_exp")
+        perm = [4, 2, 0, 5, 1, 3]
+        new_index = list(np.argsort(perm))
+        strength = tscrip.ScriptedExpert(order="strength")
+        index = tscrip.ScriptedExpert(order="index")
+        n_index_equal = 0
+        for seed in range(5):
+            x = tenv.sample_instance(cfg, seed).d_train.to_numpy()
+            calls = _expert_calls(strength, x, budget=200)
+            calls_perm = _expert_calls(strength, x[:, perm], budget=200)
+            self.assertEqual([_relabel(a, new_index) for a in calls], calls_perm)
+            calls = _expert_calls(index, x, budget=200)
+            calls_perm = _expert_calls(index, x[:, perm], budget=200)
+            relabelled = [_relabel(a, new_index) for a in calls]
+            n_index_equal += int(relabelled == calls_perm)
+        # The prototype's order depends on column indices.
+        self.assertEqual(n_index_equal, 0)
 
 
 # #############################################################################
