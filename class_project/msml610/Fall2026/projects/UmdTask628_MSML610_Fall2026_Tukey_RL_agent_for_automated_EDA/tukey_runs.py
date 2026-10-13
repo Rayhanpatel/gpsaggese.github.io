@@ -260,22 +260,22 @@ def _prepare(project_dir: str, run_id: str, confirmatory: str) -> None:
     if confirmatory:
         _check_confirmatory(project_dir, confirmatory)
     git_state = _get_git_state(project_dir)
-    # Export the committed project directory (not the working tree).
+    # Export the committed project directory (not the working tree). The
+    # `<commit>:<dir>` tree-ish archives that subtree with paths relative to
+    # it; a plain pathspec would be resolved relative to the current dir.
     rel_dir = _run(["git", "rev-parse", "--show-prefix"], cwd=project_dir)
-    src_dir = os.path.join(run_dir, "src")
-    os.makedirs(src_dir)
+    tree_ish = f"{git_state['commit']}:{rel_dir.rstrip('/')}"
     archive = subprocess.run(
-        ["git", "archive", "--format=tar", git_state["commit"], rel_dir],
+        ["git", "archive", "--format=tar", tree_ish],
         cwd=project_dir,
         check=True,
         capture_output=True,
     ).stdout
-    n_strip = str(len([part for part in rel_dir.split("/") if part]))
-    subprocess.run(
-        ["tar", "-x", "-C", src_dir, "--strip-components", n_strip],
-        input=archive,
-        check=True,
-    )
+    # Create the run dir only once the archive exists, so a failure leaves
+    # nothing behind.
+    src_dir = os.path.join(run_dir, "src")
+    os.makedirs(src_dir)
+    subprocess.run(["tar", "-x", "-C", src_dir], input=archive, check=True)
     provenance = {
         "run_id": run_id,
         "created_utc": _now_utc(),
