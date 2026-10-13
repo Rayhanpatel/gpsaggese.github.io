@@ -1,38 +1,284 @@
 {
- "run_id": "wp1_sets_bmatch",
- "commit": "2aa09bd3d6a976baa3f07f23fa14cb878ea0bea9",
- "image_id": "sha256:3a4cb6b46f4c16e77de5da627d9e18cee43aeb6e74f888959c5b5cd9462d2636",
- "source_sha256": "966022011c0f969efda757aa087df6388791fa0ef3e28cc3f70cf34e00288774",
- "command": "tukey_eval.py write_manifests --manifest_dir configs/sets && tukey_eval.py b_match --manifest_dir configs/sets --out configs/b_match.json",
- "files_sha256": {
-  "configs/sets/B_m2_A0.json": "c854f459e98a6e8865512e23424ab89450dc2acb52a9330920019a842788339d",
-  "configs/sets/B_m2_A1.json": "da06d67e08f8c1f4b576e7e3c17fdcedd1d9df3b779e27c50c9536a6bd78dad2",
-  "configs/sets/B_m2_B.json": "18d5241ae9eb9b4f1bfabdb514ae5a259e05623597b57355da3598d1f58e5dd3",
-  "configs/sets/B_m2_Braw.json": "b6d10ede39bb6ed29caa07e520c1d98665dda5cc2c1cbff63cfe8034720cc57c",
-  "configs/sets/B_m2_C.json": "35ae87b2c9e508f389ddc4f90b26e72c330199e12beb2f9b3fe8a447fde911e0",
-  "configs/sets/B_m2_D.json": "c911e4f46b5d4e414e031cf938cc1d6c82d0fc826a84d45cd6fdf3dbe18b96ee",
-  "configs/sets/B_m2_H.json": "4aecd3f4690cb8a275844b5f8ac2590952d3989111bca9029f4efc9386674d94",
-  "configs/sets/T_main.json": "742d476d6033a72eeeb4396aa3d3ac5714990d6eac84fb3f3dcf5720cc7ca807",
-  "configs/sets/T_proto.json": "807a0e55a99d827260f231fcea74b4bfddd317810b78479b55003228ad504b0c",
-  "configs/sets/T_reserve.json": "8fefe03528966c8fbada78a555f4b1218f1218f89814b2c4e9b46ca4bd92e332",
-  "configs/sets/V_m2_A0.json": "e66afbb2a4d6a578b8768004f0008fca293cf30844fba2ddd38507d79a9563fe",
-  "configs/sets/V_m2_A1.json": "af11941b74baf096cd22513afbe602baf21634736329d6392424e41ff54ecbb3",
-  "configs/sets/V_m2_B.json": "7af57faafbc0943fc1cf70f90940f02ed194839e55caf5c0d7fc235009488b1b",
-  "configs/sets/V_m2_Braw.json": "1d0a857f559e2e080e34195716453d8e0d12285ac1a547cd429a79da9a3d84ee",
-  "configs/sets/V_m2_C.json": "f193f06974e6e4f8ccd44ae8709d15a71c41ebb420f27b0eab1ceb3421d62897",
-  "configs/sets/V_m2_D.json": "402fb2a9cfd48d73d0c6ea6d14331eb9d5054bc79c16b00dd3c6faedb91907b2",
-  "configs/sets/V_m2_H.json": "7240abc8b818edb33c4685e2187c2f35eb474d034687babdc7e5ef9b95e04c37",
-  "configs/sets/V_main.json": "d1c59cfa72efc5c3005f8d937820dac9c81e096c8dbec8d9fdf89ab425931ff1",
-  "configs/sets/V_proto.json": "544b78b0d7556eb4484a32148f33060c6be05384149c02b53ef0521fc37c88de",
-  "configs/sets/V_size_10.json": "e3675dfe478ded5bc1404c8300bd2a9ad83df4153cdab8e300a77887d9dafde7",
-  "configs/sets/V_size_12.json": "3d85f06d1dea7e96137067ed3a362664e53295aa8d4d28bf26b58b98ae176914",
-  "configs/sets/V_size_15.json": "194255b2cc8c9d5571036293a6a64048ac41a01e1a071bb2e4f7e66e421926e3",
-  "configs/sets/V_size_4.json": "b37b811dd7d71369f3112c4369cc83f24183e1404b8a714226a3080da38021cd",
-  "configs/sets/V_size_5.json": "53756e21f92200eeb2aaca84bba2090c4f90ad4758dd2657e903c1566cc85165",
-  "configs/sets/V_size_6.json": "96a8bf91967914957edef83d404d35df057fe968cead1b0a7aba03aedc79a23f",
-  "configs/sets/V_size_7.json": "00af7969df588260d61b7d38c7a047dc549e791a94b695124df4b05a97b3e921",
-  "configs/sets/V_size_8.json": "d2f415b86cc2ac6c993daee0d4495e0ed5a73d94b063b448f2ff2d6fbddabaca",
-  "configs/sets/V_size_9.json": "ed888638d8fe85dee983a9536c450e4570162b70259125a7f6973408fabbf7d0",
-  "configs/b_match.json": "616274ea0b72d9b259fa57d0ef6b197e08d02595ada41292c620be5650a60aaf"
+ "artifacts": {
+  "configs/sets/B_m2_A0.json": {
+   "run_id": "wp1_sets_bmatch",
+   "commit": "2aa09bd3d6a976baa3f07f23fa14cb878ea0bea9",
+   "image_id": "sha256:3a4cb6b46f4c16e77de5da627d9e18cee43aeb6e74f888959c5b5cd9462d2636",
+   "source_sha256": "966022011c0f969efda757aa087df6388791fa0ef3e28cc3f70cf34e00288774",
+   "command": "tukey_eval.py write_manifests --manifest_dir configs/sets && tukey_eval.py b_match --manifest_dir configs/sets --out configs/b_match.json",
+   "sha256": "c854f459e98a6e8865512e23424ab89450dc2acb52a9330920019a842788339d"
+  },
+  "configs/sets/B_m2_A1.json": {
+   "run_id": "wp1_sets_bmatch",
+   "commit": "2aa09bd3d6a976baa3f07f23fa14cb878ea0bea9",
+   "image_id": "sha256:3a4cb6b46f4c16e77de5da627d9e18cee43aeb6e74f888959c5b5cd9462d2636",
+   "source_sha256": "966022011c0f969efda757aa087df6388791fa0ef3e28cc3f70cf34e00288774",
+   "command": "tukey_eval.py write_manifests --manifest_dir configs/sets && tukey_eval.py b_match --manifest_dir configs/sets --out configs/b_match.json",
+   "sha256": "da06d67e08f8c1f4b576e7e3c17fdcedd1d9df3b779e27c50c9536a6bd78dad2"
+  },
+  "configs/sets/B_m2_B.json": {
+   "run_id": "wp1_sets_bmatch",
+   "commit": "2aa09bd3d6a976baa3f07f23fa14cb878ea0bea9",
+   "image_id": "sha256:3a4cb6b46f4c16e77de5da627d9e18cee43aeb6e74f888959c5b5cd9462d2636",
+   "source_sha256": "966022011c0f969efda757aa087df6388791fa0ef3e28cc3f70cf34e00288774",
+   "command": "tukey_eval.py write_manifests --manifest_dir configs/sets && tukey_eval.py b_match --manifest_dir configs/sets --out configs/b_match.json",
+   "sha256": "18d5241ae9eb9b4f1bfabdb514ae5a259e05623597b57355da3598d1f58e5dd3"
+  },
+  "configs/sets/B_m2_Braw.json": {
+   "run_id": "wp1_sets_bmatch",
+   "commit": "2aa09bd3d6a976baa3f07f23fa14cb878ea0bea9",
+   "image_id": "sha256:3a4cb6b46f4c16e77de5da627d9e18cee43aeb6e74f888959c5b5cd9462d2636",
+   "source_sha256": "966022011c0f969efda757aa087df6388791fa0ef3e28cc3f70cf34e00288774",
+   "command": "tukey_eval.py write_manifests --manifest_dir configs/sets && tukey_eval.py b_match --manifest_dir configs/sets --out configs/b_match.json",
+   "sha256": "b6d10ede39bb6ed29caa07e520c1d98665dda5cc2c1cbff63cfe8034720cc57c"
+  },
+  "configs/sets/B_m2_C.json": {
+   "run_id": "wp1_sets_bmatch",
+   "commit": "2aa09bd3d6a976baa3f07f23fa14cb878ea0bea9",
+   "image_id": "sha256:3a4cb6b46f4c16e77de5da627d9e18cee43aeb6e74f888959c5b5cd9462d2636",
+   "source_sha256": "966022011c0f969efda757aa087df6388791fa0ef3e28cc3f70cf34e00288774",
+   "command": "tukey_eval.py write_manifests --manifest_dir configs/sets && tukey_eval.py b_match --manifest_dir configs/sets --out configs/b_match.json",
+   "sha256": "35ae87b2c9e508f389ddc4f90b26e72c330199e12beb2f9b3fe8a447fde911e0"
+  },
+  "configs/sets/B_m2_D.json": {
+   "run_id": "wp1_sets_bmatch",
+   "commit": "2aa09bd3d6a976baa3f07f23fa14cb878ea0bea9",
+   "image_id": "sha256:3a4cb6b46f4c16e77de5da627d9e18cee43aeb6e74f888959c5b5cd9462d2636",
+   "source_sha256": "966022011c0f969efda757aa087df6388791fa0ef3e28cc3f70cf34e00288774",
+   "command": "tukey_eval.py write_manifests --manifest_dir configs/sets && tukey_eval.py b_match --manifest_dir configs/sets --out configs/b_match.json",
+   "sha256": "c911e4f46b5d4e414e031cf938cc1d6c82d0fc826a84d45cd6fdf3dbe18b96ee"
+  },
+  "configs/sets/B_m2_H.json": {
+   "run_id": "wp1_sets_bmatch",
+   "commit": "2aa09bd3d6a976baa3f07f23fa14cb878ea0bea9",
+   "image_id": "sha256:3a4cb6b46f4c16e77de5da627d9e18cee43aeb6e74f888959c5b5cd9462d2636",
+   "source_sha256": "966022011c0f969efda757aa087df6388791fa0ef3e28cc3f70cf34e00288774",
+   "command": "tukey_eval.py write_manifests --manifest_dir configs/sets && tukey_eval.py b_match --manifest_dir configs/sets --out configs/b_match.json",
+   "sha256": "4aecd3f4690cb8a275844b5f8ac2590952d3989111bca9029f4efc9386674d94"
+  },
+  "configs/sets/T_main.json": {
+   "run_id": "wp1_sets_bmatch",
+   "commit": "2aa09bd3d6a976baa3f07f23fa14cb878ea0bea9",
+   "image_id": "sha256:3a4cb6b46f4c16e77de5da627d9e18cee43aeb6e74f888959c5b5cd9462d2636",
+   "source_sha256": "966022011c0f969efda757aa087df6388791fa0ef3e28cc3f70cf34e00288774",
+   "command": "tukey_eval.py write_manifests --manifest_dir configs/sets && tukey_eval.py b_match --manifest_dir configs/sets --out configs/b_match.json",
+   "sha256": "742d476d6033a72eeeb4396aa3d3ac5714990d6eac84fb3f3dcf5720cc7ca807"
+  },
+  "configs/sets/T_proto.json": {
+   "run_id": "wp1_sets_bmatch",
+   "commit": "2aa09bd3d6a976baa3f07f23fa14cb878ea0bea9",
+   "image_id": "sha256:3a4cb6b46f4c16e77de5da627d9e18cee43aeb6e74f888959c5b5cd9462d2636",
+   "source_sha256": "966022011c0f969efda757aa087df6388791fa0ef3e28cc3f70cf34e00288774",
+   "command": "tukey_eval.py write_manifests --manifest_dir configs/sets && tukey_eval.py b_match --manifest_dir configs/sets --out configs/b_match.json",
+   "sha256": "807a0e55a99d827260f231fcea74b4bfddd317810b78479b55003228ad504b0c"
+  },
+  "configs/sets/T_reserve.json": {
+   "run_id": "wp1_sets_bmatch",
+   "commit": "2aa09bd3d6a976baa3f07f23fa14cb878ea0bea9",
+   "image_id": "sha256:3a4cb6b46f4c16e77de5da627d9e18cee43aeb6e74f888959c5b5cd9462d2636",
+   "source_sha256": "966022011c0f969efda757aa087df6388791fa0ef3e28cc3f70cf34e00288774",
+   "command": "tukey_eval.py write_manifests --manifest_dir configs/sets && tukey_eval.py b_match --manifest_dir configs/sets --out configs/b_match.json",
+   "sha256": "8fefe03528966c8fbada78a555f4b1218f1218f89814b2c4e9b46ca4bd92e332"
+  },
+  "configs/sets/V_m2_A0.json": {
+   "run_id": "wp1_sets_bmatch",
+   "commit": "2aa09bd3d6a976baa3f07f23fa14cb878ea0bea9",
+   "image_id": "sha256:3a4cb6b46f4c16e77de5da627d9e18cee43aeb6e74f888959c5b5cd9462d2636",
+   "source_sha256": "966022011c0f969efda757aa087df6388791fa0ef3e28cc3f70cf34e00288774",
+   "command": "tukey_eval.py write_manifests --manifest_dir configs/sets && tukey_eval.py b_match --manifest_dir configs/sets --out configs/b_match.json",
+   "sha256": "e66afbb2a4d6a578b8768004f0008fca293cf30844fba2ddd38507d79a9563fe"
+  },
+  "configs/sets/V_m2_A1.json": {
+   "run_id": "wp1_sets_bmatch",
+   "commit": "2aa09bd3d6a976baa3f07f23fa14cb878ea0bea9",
+   "image_id": "sha256:3a4cb6b46f4c16e77de5da627d9e18cee43aeb6e74f888959c5b5cd9462d2636",
+   "source_sha256": "966022011c0f969efda757aa087df6388791fa0ef3e28cc3f70cf34e00288774",
+   "command": "tukey_eval.py write_manifests --manifest_dir configs/sets && tukey_eval.py b_match --manifest_dir configs/sets --out configs/b_match.json",
+   "sha256": "af11941b74baf096cd22513afbe602baf21634736329d6392424e41ff54ecbb3"
+  },
+  "configs/sets/V_m2_B.json": {
+   "run_id": "wp1_sets_bmatch",
+   "commit": "2aa09bd3d6a976baa3f07f23fa14cb878ea0bea9",
+   "image_id": "sha256:3a4cb6b46f4c16e77de5da627d9e18cee43aeb6e74f888959c5b5cd9462d2636",
+   "source_sha256": "966022011c0f969efda757aa087df6388791fa0ef3e28cc3f70cf34e00288774",
+   "command": "tukey_eval.py write_manifests --manifest_dir configs/sets && tukey_eval.py b_match --manifest_dir configs/sets --out configs/b_match.json",
+   "sha256": "7af57faafbc0943fc1cf70f90940f02ed194839e55caf5c0d7fc235009488b1b"
+  },
+  "configs/sets/V_m2_Braw.json": {
+   "run_id": "wp1_sets_bmatch",
+   "commit": "2aa09bd3d6a976baa3f07f23fa14cb878ea0bea9",
+   "image_id": "sha256:3a4cb6b46f4c16e77de5da627d9e18cee43aeb6e74f888959c5b5cd9462d2636",
+   "source_sha256": "966022011c0f969efda757aa087df6388791fa0ef3e28cc3f70cf34e00288774",
+   "command": "tukey_eval.py write_manifests --manifest_dir configs/sets && tukey_eval.py b_match --manifest_dir configs/sets --out configs/b_match.json",
+   "sha256": "1d0a857f559e2e080e34195716453d8e0d12285ac1a547cd429a79da9a3d84ee"
+  },
+  "configs/sets/V_m2_C.json": {
+   "run_id": "wp1_sets_bmatch",
+   "commit": "2aa09bd3d6a976baa3f07f23fa14cb878ea0bea9",
+   "image_id": "sha256:3a4cb6b46f4c16e77de5da627d9e18cee43aeb6e74f888959c5b5cd9462d2636",
+   "source_sha256": "966022011c0f969efda757aa087df6388791fa0ef3e28cc3f70cf34e00288774",
+   "command": "tukey_eval.py write_manifests --manifest_dir configs/sets && tukey_eval.py b_match --manifest_dir configs/sets --out configs/b_match.json",
+   "sha256": "f193f06974e6e4f8ccd44ae8709d15a71c41ebb420f27b0eab1ceb3421d62897"
+  },
+  "configs/sets/V_m2_D.json": {
+   "run_id": "wp1_sets_bmatch",
+   "commit": "2aa09bd3d6a976baa3f07f23fa14cb878ea0bea9",
+   "image_id": "sha256:3a4cb6b46f4c16e77de5da627d9e18cee43aeb6e74f888959c5b5cd9462d2636",
+   "source_sha256": "966022011c0f969efda757aa087df6388791fa0ef3e28cc3f70cf34e00288774",
+   "command": "tukey_eval.py write_manifests --manifest_dir configs/sets && tukey_eval.py b_match --manifest_dir configs/sets --out configs/b_match.json",
+   "sha256": "402fb2a9cfd48d73d0c6ea6d14331eb9d5054bc79c16b00dd3c6faedb91907b2"
+  },
+  "configs/sets/V_m2_H.json": {
+   "run_id": "wp1_sets_bmatch",
+   "commit": "2aa09bd3d6a976baa3f07f23fa14cb878ea0bea9",
+   "image_id": "sha256:3a4cb6b46f4c16e77de5da627d9e18cee43aeb6e74f888959c5b5cd9462d2636",
+   "source_sha256": "966022011c0f969efda757aa087df6388791fa0ef3e28cc3f70cf34e00288774",
+   "command": "tukey_eval.py write_manifests --manifest_dir configs/sets && tukey_eval.py b_match --manifest_dir configs/sets --out configs/b_match.json",
+   "sha256": "7240abc8b818edb33c4685e2187c2f35eb474d034687babdc7e5ef9b95e04c37"
+  },
+  "configs/sets/V_main.json": {
+   "run_id": "wp1_sets_bmatch",
+   "commit": "2aa09bd3d6a976baa3f07f23fa14cb878ea0bea9",
+   "image_id": "sha256:3a4cb6b46f4c16e77de5da627d9e18cee43aeb6e74f888959c5b5cd9462d2636",
+   "source_sha256": "966022011c0f969efda757aa087df6388791fa0ef3e28cc3f70cf34e00288774",
+   "command": "tukey_eval.py write_manifests --manifest_dir configs/sets && tukey_eval.py b_match --manifest_dir configs/sets --out configs/b_match.json",
+   "sha256": "d1c59cfa72efc5c3005f8d937820dac9c81e096c8dbec8d9fdf89ab425931ff1"
+  },
+  "configs/sets/V_proto.json": {
+   "run_id": "wp1_sets_bmatch",
+   "commit": "2aa09bd3d6a976baa3f07f23fa14cb878ea0bea9",
+   "image_id": "sha256:3a4cb6b46f4c16e77de5da627d9e18cee43aeb6e74f888959c5b5cd9462d2636",
+   "source_sha256": "966022011c0f969efda757aa087df6388791fa0ef3e28cc3f70cf34e00288774",
+   "command": "tukey_eval.py write_manifests --manifest_dir configs/sets && tukey_eval.py b_match --manifest_dir configs/sets --out configs/b_match.json",
+   "sha256": "544b78b0d7556eb4484a32148f33060c6be05384149c02b53ef0521fc37c88de"
+  },
+  "configs/sets/V_size_10.json": {
+   "run_id": "wp1_sets_bmatch",
+   "commit": "2aa09bd3d6a976baa3f07f23fa14cb878ea0bea9",
+   "image_id": "sha256:3a4cb6b46f4c16e77de5da627d9e18cee43aeb6e74f888959c5b5cd9462d2636",
+   "source_sha256": "966022011c0f969efda757aa087df6388791fa0ef3e28cc3f70cf34e00288774",
+   "command": "tukey_eval.py write_manifests --manifest_dir configs/sets && tukey_eval.py b_match --manifest_dir configs/sets --out configs/b_match.json",
+   "sha256": "e3675dfe478ded5bc1404c8300bd2a9ad83df4153cdab8e300a77887d9dafde7"
+  },
+  "configs/sets/V_size_12.json": {
+   "run_id": "wp1_sets_bmatch",
+   "commit": "2aa09bd3d6a976baa3f07f23fa14cb878ea0bea9",
+   "image_id": "sha256:3a4cb6b46f4c16e77de5da627d9e18cee43aeb6e74f888959c5b5cd9462d2636",
+   "source_sha256": "966022011c0f969efda757aa087df6388791fa0ef3e28cc3f70cf34e00288774",
+   "command": "tukey_eval.py write_manifests --manifest_dir configs/sets && tukey_eval.py b_match --manifest_dir configs/sets --out configs/b_match.json",
+   "sha256": "3d85f06d1dea7e96137067ed3a362664e53295aa8d4d28bf26b58b98ae176914"
+  },
+  "configs/sets/V_size_15.json": {
+   "run_id": "wp1_sets_bmatch",
+   "commit": "2aa09bd3d6a976baa3f07f23fa14cb878ea0bea9",
+   "image_id": "sha256:3a4cb6b46f4c16e77de5da627d9e18cee43aeb6e74f888959c5b5cd9462d2636",
+   "source_sha256": "966022011c0f969efda757aa087df6388791fa0ef3e28cc3f70cf34e00288774",
+   "command": "tukey_eval.py write_manifests --manifest_dir configs/sets && tukey_eval.py b_match --manifest_dir configs/sets --out configs/b_match.json",
+   "sha256": "194255b2cc8c9d5571036293a6a64048ac41a01e1a071bb2e4f7e66e421926e3"
+  },
+  "configs/sets/V_size_4.json": {
+   "run_id": "wp1_sets_bmatch",
+   "commit": "2aa09bd3d6a976baa3f07f23fa14cb878ea0bea9",
+   "image_id": "sha256:3a4cb6b46f4c16e77de5da627d9e18cee43aeb6e74f888959c5b5cd9462d2636",
+   "source_sha256": "966022011c0f969efda757aa087df6388791fa0ef3e28cc3f70cf34e00288774",
+   "command": "tukey_eval.py write_manifests --manifest_dir configs/sets && tukey_eval.py b_match --manifest_dir configs/sets --out configs/b_match.json",
+   "sha256": "b37b811dd7d71369f3112c4369cc83f24183e1404b8a714226a3080da38021cd"
+  },
+  "configs/sets/V_size_5.json": {
+   "run_id": "wp1_sets_bmatch",
+   "commit": "2aa09bd3d6a976baa3f07f23fa14cb878ea0bea9",
+   "image_id": "sha256:3a4cb6b46f4c16e77de5da627d9e18cee43aeb6e74f888959c5b5cd9462d2636",
+   "source_sha256": "966022011c0f969efda757aa087df6388791fa0ef3e28cc3f70cf34e00288774",
+   "command": "tukey_eval.py write_manifests --manifest_dir configs/sets && tukey_eval.py b_match --manifest_dir configs/sets --out configs/b_match.json",
+   "sha256": "53756e21f92200eeb2aaca84bba2090c4f90ad4758dd2657e903c1566cc85165"
+  },
+  "configs/sets/V_size_6.json": {
+   "run_id": "wp1_sets_bmatch",
+   "commit": "2aa09bd3d6a976baa3f07f23fa14cb878ea0bea9",
+   "image_id": "sha256:3a4cb6b46f4c16e77de5da627d9e18cee43aeb6e74f888959c5b5cd9462d2636",
+   "source_sha256": "966022011c0f969efda757aa087df6388791fa0ef3e28cc3f70cf34e00288774",
+   "command": "tukey_eval.py write_manifests --manifest_dir configs/sets && tukey_eval.py b_match --manifest_dir configs/sets --out configs/b_match.json",
+   "sha256": "96a8bf91967914957edef83d404d35df057fe968cead1b0a7aba03aedc79a23f"
+  },
+  "configs/sets/V_size_7.json": {
+   "run_id": "wp1_sets_bmatch",
+   "commit": "2aa09bd3d6a976baa3f07f23fa14cb878ea0bea9",
+   "image_id": "sha256:3a4cb6b46f4c16e77de5da627d9e18cee43aeb6e74f888959c5b5cd9462d2636",
+   "source_sha256": "966022011c0f969efda757aa087df6388791fa0ef3e28cc3f70cf34e00288774",
+   "command": "tukey_eval.py write_manifests --manifest_dir configs/sets && tukey_eval.py b_match --manifest_dir configs/sets --out configs/b_match.json",
+   "sha256": "00af7969df588260d61b7d38c7a047dc549e791a94b695124df4b05a97b3e921"
+  },
+  "configs/sets/V_size_8.json": {
+   "run_id": "wp1_sets_bmatch",
+   "commit": "2aa09bd3d6a976baa3f07f23fa14cb878ea0bea9",
+   "image_id": "sha256:3a4cb6b46f4c16e77de5da627d9e18cee43aeb6e74f888959c5b5cd9462d2636",
+   "source_sha256": "966022011c0f969efda757aa087df6388791fa0ef3e28cc3f70cf34e00288774",
+   "command": "tukey_eval.py write_manifests --manifest_dir configs/sets && tukey_eval.py b_match --manifest_dir configs/sets --out configs/b_match.json",
+   "sha256": "d2f415b86cc2ac6c993daee0d4495e0ed5a73d94b063b448f2ff2d6fbddabaca"
+  },
+  "configs/sets/V_size_9.json": {
+   "run_id": "wp1_sets_bmatch",
+   "commit": "2aa09bd3d6a976baa3f07f23fa14cb878ea0bea9",
+   "image_id": "sha256:3a4cb6b46f4c16e77de5da627d9e18cee43aeb6e74f888959c5b5cd9462d2636",
+   "source_sha256": "966022011c0f969efda757aa087df6388791fa0ef3e28cc3f70cf34e00288774",
+   "command": "tukey_eval.py write_manifests --manifest_dir configs/sets && tukey_eval.py b_match --manifest_dir configs/sets --out configs/b_match.json",
+   "sha256": "ed888638d8fe85dee983a9536c450e4570162b70259125a7f6973408fabbf7d0"
+  },
+  "configs/b_match.json": {
+   "run_id": "wp1_sets_bmatch",
+   "commit": "2aa09bd3d6a976baa3f07f23fa14cb878ea0bea9",
+   "image_id": "sha256:3a4cb6b46f4c16e77de5da627d9e18cee43aeb6e74f888959c5b5cd9462d2636",
+   "source_sha256": "966022011c0f969efda757aa087df6388791fa0ef3e28cc3f70cf34e00288774",
+   "command": "tukey_eval.py write_manifests --manifest_dir configs/sets && tukey_eval.py b_match --manifest_dir configs/sets --out configs/b_match.json",
+   "sha256": "616274ea0b72d9b259fa57d0ef6b197e08d02595ada41292c620be5650a60aaf"
+  },
+  "configs/sets/B_m2_E.json": {
+   "run_id": "wp2_m2_sets_efg",
+   "commit": "8e5fbd544334f22d674421adc79e9d3c85160f0a",
+   "image_id": "sha256:3a4cb6b46f4c16e77de5da627d9e18cee43aeb6e74f888959c5b5cd9462d2636",
+   "source_sha256": "b061aa8c55cf781d3dcb0201d11a3cd374d8a0677963058066733e7fade308bf",
+   "command": "python tukey_eval.py write_manifests --manifest_dir configs/sets --names B_m2_E V_m2_E B_m2_F V_m2_F B_m2_G V_m2_G",
+   "sha256": "8f89c1c631eb9e3b4a6a23cb286aa7fe9d57901d396684d7e5b9db070655c240"
+  },
+  "configs/sets/V_m2_E.json": {
+   "run_id": "wp2_m2_sets_efg",
+   "commit": "8e5fbd544334f22d674421adc79e9d3c85160f0a",
+   "image_id": "sha256:3a4cb6b46f4c16e77de5da627d9e18cee43aeb6e74f888959c5b5cd9462d2636",
+   "source_sha256": "b061aa8c55cf781d3dcb0201d11a3cd374d8a0677963058066733e7fade308bf",
+   "command": "python tukey_eval.py write_manifests --manifest_dir configs/sets --names B_m2_E V_m2_E B_m2_F V_m2_F B_m2_G V_m2_G",
+   "sha256": "510fba5aaad477cb87b50a31a290dfec8ad564730e517b9d692154de5eddf478"
+  },
+  "configs/sets/B_m2_F.json": {
+   "run_id": "wp2_m2_sets_efg",
+   "commit": "8e5fbd544334f22d674421adc79e9d3c85160f0a",
+   "image_id": "sha256:3a4cb6b46f4c16e77de5da627d9e18cee43aeb6e74f888959c5b5cd9462d2636",
+   "source_sha256": "b061aa8c55cf781d3dcb0201d11a3cd374d8a0677963058066733e7fade308bf",
+   "command": "python tukey_eval.py write_manifests --manifest_dir configs/sets --names B_m2_E V_m2_E B_m2_F V_m2_F B_m2_G V_m2_G",
+   "sha256": "702eb8042493d5dd1a122812b5cc17c58f13fdb7611c017d52258b1ded5da81e"
+  },
+  "configs/sets/V_m2_F.json": {
+   "run_id": "wp2_m2_sets_efg",
+   "commit": "8e5fbd544334f22d674421adc79e9d3c85160f0a",
+   "image_id": "sha256:3a4cb6b46f4c16e77de5da627d9e18cee43aeb6e74f888959c5b5cd9462d2636",
+   "source_sha256": "b061aa8c55cf781d3dcb0201d11a3cd374d8a0677963058066733e7fade308bf",
+   "command": "python tukey_eval.py write_manifests --manifest_dir configs/sets --names B_m2_E V_m2_E B_m2_F V_m2_F B_m2_G V_m2_G",
+   "sha256": "bf9dfcff32b8d7529ac7c27f0ec496cd4441f504068833906b86790fb85463bf"
+  },
+  "configs/sets/B_m2_G.json": {
+   "run_id": "wp2_m2_sets_efg",
+   "commit": "8e5fbd544334f22d674421adc79e9d3c85160f0a",
+   "image_id": "sha256:3a4cb6b46f4c16e77de5da627d9e18cee43aeb6e74f888959c5b5cd9462d2636",
+   "source_sha256": "b061aa8c55cf781d3dcb0201d11a3cd374d8a0677963058066733e7fade308bf",
+   "command": "python tukey_eval.py write_manifests --manifest_dir configs/sets --names B_m2_E V_m2_E B_m2_F V_m2_F B_m2_G V_m2_G",
+   "sha256": "d7a2b9b49089daf6b64bf97d1f2b09b6a9eb39a7b8292cba6f89069aba5b2d62"
+  },
+  "configs/sets/V_m2_G.json": {
+   "run_id": "wp2_m2_sets_efg",
+   "commit": "8e5fbd544334f22d674421adc79e9d3c85160f0a",
+   "image_id": "sha256:3a4cb6b46f4c16e77de5da627d9e18cee43aeb6e74f888959c5b5cd9462d2636",
+   "source_sha256": "b061aa8c55cf781d3dcb0201d11a3cd374d8a0677963058066733e7fade308bf",
+   "command": "python tukey_eval.py write_manifests --manifest_dir configs/sets --names B_m2_E V_m2_E B_m2_F V_m2_F B_m2_G V_m2_G",
+   "sha256": "093f5aaf906d968290a47c96d129e8ebad56a487cfce47116b17ed866b5ec386"
+  }
  }
 }
