@@ -1,0 +1,12 @@
+{
+ "artifacts": {
+  "results/m1/sortability.json": {
+   "run_id": "wp2_m1_sortability_b",
+   "commit": "a2a8738000ee8efe94b42bac4b3ce69f0884146a",
+   "image_id": "sha256:3a4cb6b46f4c16e77de5da627d9e18cee43aeb6e74f888959c5b5cd9462d2636",
+   "source_sha256": "fed2642078e6cd8b65fd1ea91905d5910f7b9824890c67f8ad99b1ad6d8ba69a",
+   "command": "mkdir -p results/m1 && python tukey_eval.py sortability --out results/m1/sortability.json",
+   "sha256": "2c6605af29afead1a124dc34101d2db1a555932add70539fad104497eb89c022"
+  }
+ }
+}
