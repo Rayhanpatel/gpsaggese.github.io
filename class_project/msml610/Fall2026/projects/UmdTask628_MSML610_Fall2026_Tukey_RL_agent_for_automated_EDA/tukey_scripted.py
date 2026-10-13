@@ -146,14 +146,39 @@ class ScriptedExpert:
     `emit_graph()` turns whatever evidence exists into a DAG.
     """
 
-    def __init__(self, *, threshold: float = PROTO_THRESHOLD) -> None:
+    def __init__(
+        self, *, threshold: float = PROTO_THRESHOLD, order: str = "index"
+    ) -> None:
         """
         Build the agent.
 
+        The processing order changes which calls a budget cuts, never the
+        unbudgeted graph (each pair's decision uses only its own tests).
+
         :param threshold: cut-off for `|r|` and `|pcorr|`
             - Default: the prototype's 0.15
+        :param order: processing order of pairs and conditioning variables
+            - "index": the prototype's (pairs i < j in lexicographic order,
+              conditioning variables in increasing index)
+            - "strength": pairs by decreasing `|r|`, conditioning variables k
+              by decreasing `max(|r_ik|, |r_jk|)`, ties by index; the
+              behaviour-cloning teacher, since a policy sees no column indices
         """
+        hdbg.dassert_in(order, ("index", "strength"))
         self.threshold = threshold
+        self.order = order
+
+    def _pairs(self, evidence: ttools.Evidence) -> List[Tuple[int, int]]:
+        """
+        List the pairs `i < j` in processing order.
+
+        :param evidence: evidence so far
+        :return: pairs
+        """
+        pairs = list(itertools.combinations(range(evidence.n_nodes), 2))
+        if self.order == "strength":
+            pairs.sort(key=lambda p: (-abs(evidence.corr[p[0], p[1]]), p))
+        return pairs
 
     def _ci_actions(
         self, evidence: ttools.Evidence, i: int, j: int
@@ -166,11 +191,11 @@ class ScriptedExpert:
         :param j: second variable
         :return: `ci_test` actions with each single other variable
         """
-        actions = [
-            ttools.ci_test_action(i, j, (k,))
-            for k in range(evidence.n_nodes)
-            if k not in (i, j)
-        ]
+        others = [k for k in range(evidence.n_nodes) if k not in (i, j)]
+        if self.order == "strength":
+            corr = np.abs(evidence.corr)
+            others.sort(key=lambda k: (-max(corr[i, k], corr[j, k]), k))
+        actions = [ttools.ci_test_action(i, j, (k,)) for k in others]
         return actions
 
     def _next_pair_action(
@@ -209,7 +234,7 @@ class ScriptedExpert:
         stop = ttools.Action(ttools.STOP)
         if evidence.budget_left <= 0:
             return stop
-        for i, j in itertools.combinations(range(evidence.n_nodes), 2):
+        for i, j in self._pairs(evidence):
             if abs(evidence.corr[i, j]) < self.threshold:
                 continue
             action = self._next_pair_action(evidence, i, j)
