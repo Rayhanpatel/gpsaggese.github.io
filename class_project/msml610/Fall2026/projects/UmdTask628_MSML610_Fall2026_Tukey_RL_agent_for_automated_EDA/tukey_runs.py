@@ -262,15 +262,21 @@ def _prepare(project_dir: str, run_id: str, confirmatory: str) -> None:
     git_state = _get_git_state(project_dir)
     # Export the committed project directory (not the working tree). The
     # `<commit>:<dir>` tree-ish archives that subtree with paths relative to
-    # it; a plain pathspec would be resolved relative to the current dir.
+    # it. `git archive` must run from the repo root: from a subdirectory it
+    # also limits the output to that subdirectory, which yields an empty tar.
     rel_dir = _run(["git", "rev-parse", "--show-prefix"], cwd=project_dir)
+    repo_root = _run(["git", "rev-parse", "--show-toplevel"], cwd=project_dir)
     tree_ish = f"{git_state['commit']}:{rel_dir.rstrip('/')}"
     archive = subprocess.run(
         ["git", "archive", "--format=tar", tree_ish],
-        cwd=project_dir,
+        cwd=repo_root,
         check=True,
         capture_output=True,
     ).stdout
+    # An empty tar is 10240 bytes of zeros: refuse to start from no source.
+    hdbg.dassert_lt(
+        10240, len(archive), "Empty source archive for '%s'", tree_ish
+    )
     # Create the run dir only once the archive exists, so a failure leaves
     # nothing behind.
     src_dir = os.path.join(run_dir, "src")
