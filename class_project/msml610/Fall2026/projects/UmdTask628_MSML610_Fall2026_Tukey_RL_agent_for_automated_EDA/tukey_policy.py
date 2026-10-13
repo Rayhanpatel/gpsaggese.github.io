@@ -5,7 +5,9 @@ emits a DAG.
 Both towers have the same encoder architecture (separate weights): per-node and
 per-pair MLPs, one round of message passing with mean and max pooling, and a
 global summary. There are no index embeddings, so relabelling the variables
-relabels the outputs.
+relabels the outputs. Every module works on a batch of states with the same
+number of variables (leading batch dimension); the single-state methods add
+and remove that dimension.
 
 Decoder: node utilities `u` define a Plackett-Luce distribution over causal
 orders; given an order, each pair `i` before `j` gets the edge i -> j with
@@ -14,7 +16,13 @@ emitted, and `log p(G, order) = log PL(order) + sum of Bernoulli terms` is
 exact, so policy gradients use exactly the graph that is scored.
 
 Tool head: a masked softmax over the legal tool calls and STOP; each candidate
-is scored from the embeddings of the variables it involves.
+is scored from the embeddings of the variables it involves. Its first layer is
+factorised (a linear map of each embedding slot, then a sum), so per-candidate
+inputs are never materialised.
+
+A value head on the tool tower (`state_value`) predicts the return from a
+state; it reads detached embeddings, so it never changes the policy's features,
+and serves only as a baseline.
 
 Import as:
 
@@ -22,7 +30,7 @@ import tukey_policy as tpolic
 """
 
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -45,8 +53,8 @@ _TYPES = (
     "stop",
 )
 _TYPE_INDEX = {name: k for k, name in enumerate(_TYPES)}
-# Embedding slots of a candidate: pair, node A, node B, conditioning set.
-_N_SLOTS = 4
+
+Batch = Tuple[torch.Tensor, torch.Tensor, torch.Tensor]
 
 
 def _mlp(n_in: int, n_hidden: int, n_out: int) -> torch.nn.Module:
@@ -66,19 +74,21 @@ def _mlp(n_in: int, n_hidden: int, n_out: int) -> torch.nn.Module:
     return mlp
 
 
-def obs_to_tensors(
-    obs: tfeat.Observation, *, dtype: torch.dtype = torch.float32
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def stack_observations(
+    observations: Sequence[tfeat.Observation],
+    *,
+    dtype: torch.dtype = torch.float32,
+) -> Batch:
     """
-    Convert an observation to tensors.
+    Stack observations with the same number of variables into tensors.
 
-    :param obs: observation
+    :param observations: observations
     :param dtype: tensor type
-    :return: node, pair and global feature tensors
+    :return: node (B, d, F_node), pair (B, d, d, F_pair), global (B, F_glob)
     """
-    node = torch.as_tensor(obs.node, dtype=dtype)
-    pair = torch.as_tensor(obs.pair, dtype=dtype)
-    glob = torch.as_tensor(obs.glob, dtype=dtype)
+    node = torch.as_tensor(np.stack([o.node for o in observations]), dtype=dtype)
+    pair = torch.as_tensor(np.stack([o.pair for o in observations]), dtype=dtype)
+    glob = torch.as_tensor(np.stack([o.glob for o in observations]), dtype=dtype)
     return node, pair, glob
 
 
@@ -89,7 +99,7 @@ def obs_to_tensors(
 
 class Encoder(torch.nn.Module):
     """
-    Embed nodes, ordered pairs and the global state.
+    Embed nodes, ordered pairs and the global state of a batch of states.
     """
 
     def __init__(self, *, hidden: int = 64) -> None:
@@ -111,35 +121,33 @@ class Encoder(torch.nn.Module):
 
     def forward(
         self, node: torch.Tensor, pair: torch.Tensor, glob: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Batch:
         """
-        Embed one state.
+        Embed a batch of states.
 
-        :param node: node features, shape (d, F_node)
-        :param pair: pair features, shape (d, d, F_pair)
-        :param glob: global features, shape (F_glob,)
-        :return: node (d, H), pair (d, d, H) and global (H,) embeddings
+        :param node: node features (B, d, F_node)
+        :param pair: pair features (B, d, d, F_pair)
+        :param glob: global features (B, F_glob)
+        :return: node (B, d, H), pair (B, d, d, H) and global (B, H) embeddings
         """
-        n_nodes = node.shape[0]
-        node_h = torch.relu(
-            self.node_in(torch.cat([node, glob.expand(n_nodes, -1)], dim=-1))
-        )
-        pair_h = torch.relu(
-            self.pair_in(
-                torch.cat([pair, glob.expand(n_nodes, n_nodes, -1)], dim=-1)
-            )
-        )
+        n_batch, n_nodes = node.shape[0], node.shape[1]
+        glob_node = glob[:, None, :].expand(n_batch, n_nodes, -1)
+        glob_pair = glob[:, None, None, :].expand(n_batch, n_nodes, n_nodes, -1)
+        node_h = torch.relu(self.node_in(torch.cat([node, glob_node], dim=-1)))
+        pair_h = torch.relu(self.pair_in(torch.cat([pair, glob_pair], dim=-1)))
         # Pool over the other variables, excluding the diagonal.
         off_diag = ~torch.eye(n_nodes, dtype=torch.bool)
-        mask = off_diag.unsqueeze(-1).to(pair_h.dtype)
+        mask = off_diag[None, :, :, None].to(pair_h.dtype)
         n_others = max(1, n_nodes - 1)
-        out_mean = (pair_h * mask).sum(dim=1) / n_others
-        in_mean = (pair_h * mask).sum(dim=0) / n_others
-        very_negative = torch.finfo(pair_h.dtype).min
-        masked = pair_h.masked_fill(~off_diag.unsqueeze(-1), very_negative)
+        out_mean = (pair_h * mask).sum(dim=2) / n_others
+        in_mean = (pair_h * mask).sum(dim=1) / n_others
         if n_nodes > 1:
-            out_max = masked.max(dim=1).values
-            in_max = masked.max(dim=0).values
+            very_negative = torch.finfo(pair_h.dtype).min
+            masked = pair_h.masked_fill(
+                ~off_diag[None, :, :, None], very_negative
+            )
+            out_max = masked.max(dim=2).values
+            in_max = masked.max(dim=1).values
         else:
             out_max = torch.zeros_like(node_h)
             in_max = torch.zeros_like(node_h)
@@ -148,24 +156,16 @@ class Encoder(torch.nn.Module):
                 torch.cat([node_h, out_mean, out_max, in_mean, in_max], dim=-1)
             )
         )
+        node_i = node_h[:, :, None, :].expand(n_batch, n_nodes, n_nodes, -1)
+        node_j = node_h[:, None, :, :].expand(n_batch, n_nodes, n_nodes, -1)
         pair_h = torch.relu(
-            self.pair_update(
-                torch.cat(
-                    [
-                        pair_h,
-                        node_h.unsqueeze(1).expand(n_nodes, n_nodes, -1),
-                        node_h.unsqueeze(0).expand(n_nodes, n_nodes, -1),
-                    ],
-                    dim=-1,
-                )
-            )
+            self.pair_update(torch.cat([pair_h, node_i, node_j], dim=-1))
         )
-        pair_mean = (pair_h * mask).sum(dim=(0, 1)) / max(
-            1, n_nodes * (n_nodes - 1)
-        )
+        n_pairs = max(1, n_nodes * (n_nodes - 1))
+        pair_mean = (pair_h * mask).sum(dim=(1, 2)) / n_pairs
         glob_h = torch.relu(
             self.glob_out(
-                torch.cat([glob, node_h.mean(dim=0), pair_mean], dim=-1)
+                torch.cat([glob, node_h.mean(dim=1), pair_mean], dim=-1)
             )
         )
         return node_h, pair_h, glob_h
@@ -178,17 +178,15 @@ class Encoder(torch.nn.Module):
 
 def _precedence(orders: torch.Tensor) -> torch.Tensor:
     """
-    Compute "i comes before j" for each sampled order.
+    Compute "i comes before j" for each order.
 
-    :param orders: node orders, shape (M, d)
-    :return: boolean tensor (M, d, d), True where i precedes j
+    :param orders: node orders (..., d), first node first
+    :return: boolean tensor (..., d, d), True where i precedes j
     """
-    n_samples, n_nodes = orders.shape
-    position = torch.empty_like(orders)
-    position.scatter_(
-        1, orders, torch.arange(n_nodes).expand(n_samples, n_nodes).contiguous()
-    )
-    before = position.unsqueeze(2) < position.unsqueeze(1)
+    n_nodes = orders.shape[-1]
+    ranks = torch.arange(n_nodes).expand(orders.shape).contiguous()
+    position = torch.empty_like(orders).scatter_(-1, orders, ranks)
+    before = position.unsqueeze(-1) < position.unsqueeze(-2)
     return before
 
 
@@ -201,18 +199,24 @@ def order_edge_log_prob(
     """
     Compute `log p(G, order)` of sampled graphs.
 
-    :param u: node utilities, shape (d,)
-    :param logits: edge logits, shape (d, d)
-    :param orders: node orders, shape (M, d), first node first
-    :param B: graphs, shape (M, d, d), only edges along the order
-    :return: log-probabilities, shape (M,)
+    Leading dimensions are batch dimensions: `u` (..., d) and `logits`
+    (..., d, d) are shared by the M samples in `orders` (..., M, d) and `B`
+    (..., M, d, d).
+
+    :param u: node utilities
+    :param logits: edge logits
+    :param orders: node orders, first node first
+    :param B: graphs, with edges only along their order
+    :return: log-probabilities (..., M)
     """
-    u_ordered = u[orders]
+    u_rep = u.unsqueeze(-2).expand(orders.shape)
+    u_ordered = torch.gather(u_rep, -1, orders)
     # log PL = sum_k [u_(k) - logsumexp(u_(k..d))].
     tail_lse = torch.logcumsumexp(u_ordered.flip(-1), dim=-1).flip(-1)
     log_p_order = (u_ordered - tail_lse).sum(dim=-1)
     before = _precedence(orders).to(logits.dtype)
     B = B.to(logits.dtype)
+    logits = logits.unsqueeze(-3)
     log_bern = B * torch.nn.functional.logsigmoid(logits) + (
         1 - B
     ) * torch.nn.functional.logsigmoid(-logits)
@@ -229,24 +233,21 @@ def sample_graphs(
     """
     Sample orders (Gumbel-top-k) and edges along them.
 
-    :param u: node utilities, shape (d,)
-    :param logits: edge logits, shape (d, d)
-    :param n_samples: number of graphs
+    :param u: node utilities (..., d)
+    :param logits: edge logits (..., d, d)
+    :param n_samples: graphs per state (M)
     :param generator: random generator
-    :return: orders (M, d) and graphs (M, d, d) as integer tensors
+    :return: orders (..., M, d) and graphs (..., M, d, d) as integer tensors
     """
-    n_nodes = u.shape[0]
     with torch.no_grad():
-        uniform = torch.rand(
-            n_samples, n_nodes, generator=generator, dtype=u.dtype
-        )
+        u_rep = u.unsqueeze(-2).expand(*u.shape[:-1], n_samples, u.shape[-1])
+        uniform = torch.rand(u_rep.shape, generator=generator, dtype=u.dtype)
         gumbel = -torch.log(-torch.log(uniform.clamp_min(1e-12)))
-        orders = torch.argsort(u.unsqueeze(0) + gumbel, dim=-1, descending=True)
+        orders = torch.argsort(u_rep + gumbel, dim=-1, descending=True)
         before = _precedence(orders)
-        coins = torch.rand(
-            n_samples, n_nodes, n_nodes, generator=generator, dtype=u.dtype
-        )
-        B = ((coins < torch.sigmoid(logits)) & before).long()
+        probs = torch.sigmoid(logits).unsqueeze(-3)
+        coins = torch.rand(before.shape, generator=generator, dtype=u.dtype)
+        B = ((coins < probs) & before).long()
     return orders, B
 
 
@@ -254,13 +255,13 @@ def greedy_graph(u: torch.Tensor, logits: torch.Tensor) -> np.ndarray:
     """
     Decode the most likely order and the edges with probability above 1/2.
 
-    :param u: node utilities
-    :param logits: edge logits
+    :param u: node utilities (d,)
+    :param logits: edge logits (d, d)
     :return: DAG adjacency
     """
     with torch.no_grad():
-        order = torch.argsort(u, descending=True).unsqueeze(0)
-        before = _precedence(order)[0]
+        order = torch.argsort(u, descending=True)
+        before = _precedence(order)
         B = ((logits > 0) & before).long()
     return B.numpy()
 
@@ -301,9 +302,11 @@ def _candidate_index(
     """
     Precompute which embeddings each candidate action reads.
 
-    Each candidate has 4 slots (pair, node A, node B, conditioning set) of up to
-    2 indices each, averaged with the given weights; index `n_nodes` (nodes) or
-    `n_nodes**2` (pairs) points at a zero row.
+    Each candidate has a pair slot (up to 2 ordered pairs), three node slots
+    (node A, node B, conditioning set; up to 2 nodes each) and a context slot
+    (up to 8 ordered pairs linking a CI test's conditioning variables to its
+    pair, or a regression's two predictors), averaged with the given weights;
+    index `n_nodes` (nodes) or `n_nodes**2` (pairs) points at a zero row.
 
     :param actions: candidate actions (tool calls, then STOP)
     :param n_nodes: number of variables
@@ -314,8 +317,10 @@ def _candidate_index(
     n_cand = len(actions)
     pair_idx = np.full((n_cand, 2), null_pair)
     node_idx = np.full((n_cand, 3, 2), null_node)
+    context_idx = np.full((n_cand, 8), null_pair)
     pair_w = np.zeros((n_cand, 2))
     node_w = np.zeros((n_cand, 3, 2))
+    context_w = np.zeros((n_cand, 8))
     types = np.zeros(n_cand, dtype=int)
     for c, action in enumerate(actions):
         args = action.args
@@ -327,6 +332,13 @@ def _candidate_index(
             node_w[c, 0] = 0.5
             node_idx[c, 2, : len(cond)] = cond
             node_w[c, 2, : len(cond)] = 1.0 / len(cond)
+            # Context: how each conditioning variable relates to i and j.
+            links = []
+            for k in cond:
+                links += [i * n_nodes + k, k * n_nodes + i]
+                links += [j * n_nodes + k, k * n_nodes + j]
+            context_idx[c, : len(links)] = links
+            context_w[c, : len(links)] = 1.0 / len(links)
             types[c] = _TYPE_INDEX[f"ci_{len(cond)}"]
         elif action.kind == ttools.REGRESS:
             target, preds = args[0], args[1:]
@@ -336,6 +348,11 @@ def _candidate_index(
             node_w[c, 0, 0] = 1.0
             node_idx[c, 1, : len(preds)] = preds
             node_w[c, 1, : len(preds)] = 1.0 / len(preds)
+            if len(preds) == 2:
+                # Context: how the two predictors relate to each other.
+                p_1, p_2 = preds
+                context_idx[c, :2] = (p_1 * n_nodes + p_2, p_2 * n_nodes + p_1)
+                context_w[c, :2] = 0.5
             types[c] = _TYPE_INDEX[f"regress_{len(preds)}"]
         elif action.kind == ttools.LINGAM_DIR:
             i, j = args
@@ -357,6 +374,8 @@ def _candidate_index(
         "pair_w": torch.as_tensor(pair_w),
         "node_idx": torch.as_tensor(node_idx),
         "node_w": torch.as_tensor(node_w),
+        "context_idx": torch.as_tensor(context_idx),
+        "context_w": torch.as_tensor(context_w),
         "types": torch.as_tensor(types),
     }
     return index
@@ -364,7 +383,7 @@ def _candidate_index(
 
 class ToolHead(torch.nn.Module):
     """
-    Score every candidate tool call and STOP.
+    Score every candidate tool call and STOP for a batch of states.
     """
 
     def __init__(self, *, hidden: int = 64) -> None:
@@ -374,7 +393,15 @@ class ToolHead(torch.nn.Module):
         :param hidden: embedding width
         """
         super().__init__()
-        self.score = _mlp((_N_SLOTS + 1) * hidden + len(_TYPES), hidden, 1)
+        # Factorised first layer: one linear map per slot, then a sum.
+        self.proj_pair = torch.nn.Linear(hidden, hidden, bias=False)
+        self.proj_context = torch.nn.Linear(hidden, hidden, bias=False)
+        self.proj_nodes = torch.nn.ModuleList(
+            [torch.nn.Linear(hidden, hidden, bias=False) for _ in range(3)]
+        )
+        self.proj_glob = torch.nn.Linear(hidden, hidden)
+        self.type_embedding = torch.nn.Embedding(len(_TYPES), hidden)
+        self.out = torch.nn.Linear(hidden, 1)
 
     def forward(
         self,
@@ -384,42 +411,36 @@ class ToolHead(torch.nn.Module):
         index: Dict[str, torch.Tensor],
     ) -> torch.Tensor:
         """
-        Compute one logit per candidate.
+        Compute one logit per candidate and state.
 
-        :param node_h: node embeddings (d, H)
-        :param pair_h: pair embeddings (d, d, H)
-        :param glob_h: global embedding (H,)
+        :param node_h: node embeddings (B, d, H)
+        :param pair_h: pair embeddings (B, d, d, H)
+        :param glob_h: global embeddings (B, H)
         :param index: output of `_candidate_index()`
-        :return: logits, shape (n_candidates,)
+        :return: logits (B, n_candidates)
         """
-        hidden = node_h.shape[-1]
+        n_batch, n_nodes, hidden = node_h.shape
         dtype = node_h.dtype
-        node_table = torch.cat([node_h, node_h.new_zeros(1, hidden)])
+        zeros = node_h.new_zeros(n_batch, 1, hidden)
+        node_table = torch.cat([node_h, zeros], dim=1)
         pair_table = torch.cat(
-            [pair_h.reshape(-1, hidden), pair_h.new_zeros(1, hidden)]
+            [pair_h.reshape(n_batch, n_nodes * n_nodes, hidden), zeros], dim=1
         )
-        pair_emb = (
-            pair_table[index["pair_idx"]]
-            * index["pair_w"].to(dtype).unsqueeze(-1)
-        ).sum(1)
-        node_emb = (
-            node_table[index["node_idx"]]
-            * index["node_w"].to(dtype).unsqueeze(-1)
-        ).sum(2)
-        n_cand = pair_emb.shape[0]
-        one_hot = torch.nn.functional.one_hot(index["types"], len(_TYPES)).to(
-            dtype
-        )
-        features = torch.cat(
-            [
-                pair_emb,
-                node_emb.reshape(n_cand, -1),
-                glob_h.expand(n_cand, -1),
-                one_hot,
-            ],
-            dim=-1,
-        )
-        logits = self.score(features).squeeze(-1)
+        pair_proj = self.proj_pair(pair_table)[:, index["pair_idx"]]
+        pair_w = index["pair_w"].to(dtype)[None, :, :, None]
+        hidden_sum = (pair_proj * pair_w).sum(dim=2)
+        context_proj = self.proj_context(pair_table)[:, index["context_idx"]]
+        context_w = index["context_w"].to(dtype)[None, :, :, None]
+        hidden_sum = hidden_sum + (context_proj * context_w).sum(dim=2)
+        node_w = index["node_w"].to(dtype)
+        for slot, proj in enumerate(self.proj_nodes):
+            slot_proj = proj(node_table)[:, index["node_idx"][:, slot]]
+            hidden_sum = hidden_sum + (
+                slot_proj * node_w[None, :, slot, :, None]
+            ).sum(dim=2)
+        hidden_sum = hidden_sum + self.proj_glob(glob_h)[:, None, :]
+        hidden_sum = hidden_sum + self.type_embedding(index["types"])[None]
+        logits = self.out(torch.relu(hidden_sum)).squeeze(-1)
         return logits
 
 
@@ -430,7 +451,7 @@ class ToolHead(torch.nn.Module):
 
 class TukeyPolicy(torch.nn.Module):
     """
-    Tool tower and decoder tower with separate weights.
+    Tool tower and decoder tower with separate weights, plus a value head.
     """
 
     def __init__(self, *, hidden: int = 64) -> None:
@@ -440,14 +461,23 @@ class TukeyPolicy(torch.nn.Module):
         :param hidden: embedding width
         """
         super().__init__()
+        self.hidden = hidden
         self.tool_encoder = Encoder(hidden=hidden)
         self.tool_head = ToolHead(hidden=hidden)
         self.decoder_encoder = Encoder(hidden=hidden)
         self.node_score = _mlp(2 * hidden, hidden, 1)
         self.edge_score = _mlp(2 * hidden, hidden, 1)
+        self.value_head = _mlp(2 * hidden, hidden, 1)
         self._candidates: Dict[
             int, Tuple[List[ttools.Action], Dict[str, torch.Tensor]]
         ] = {}
+
+    @property
+    def dtype(self) -> torch.dtype:
+        """
+        Floating-point type of the parameters.
+        """
+        return next(self.parameters()).dtype
 
     def candidates(
         self, n_nodes: int
@@ -461,54 +491,78 @@ class TukeyPolicy(torch.nn.Module):
         if n_nodes not in self._candidates:
             actions = ttools.enumerate_tool_actions(n_nodes)
             actions.append(ttools.Action(ttools.STOP))
-            self._candidates[n_nodes] = (
-                actions,
-                _candidate_index(actions, n_nodes),
-            )
+            index = _candidate_index(actions, n_nodes)
+            self._candidates[n_nodes] = (actions, index)
         return self._candidates[n_nodes]
+
+    def tool_log_probs_batch(
+        self, batch: Batch, legal: np.ndarray
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Compute log-probabilities of every candidate and the state values.
+
+        :param batch: stacked observations (`stack_observations()`)
+        :param legal: boolean mask (B, n_candidates)
+        :return: log-probabilities (B, n_candidates), -inf when illegal, and
+            state values (B,) from the value head (detached features)
+        """
+        node_h, pair_h, glob_h = self.tool_encoder(*batch)
+        _, index = self.candidates(node_h.shape[1])
+        logits = self.tool_head(node_h, pair_h, glob_h, index)
+        legal_t = torch.as_tensor(legal, dtype=torch.bool)
+        logits = logits.masked_fill(~legal_t, float("-inf"))
+        log_probs = torch.log_softmax(logits, dim=-1)
+        summary = torch.cat([glob_h, node_h.mean(dim=1)], dim=-1).detach()
+        values = self.value_head(summary).squeeze(-1)
+        return log_probs, values
+
+    def decoder_params_batch(
+        self, batch: Batch
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Compute order utilities and edge logits for a batch of states.
+
+        :param batch: stacked observations
+        :return: `u` (B, d) and `logits` (B, d, d)
+        """
+        node_h, pair_h, glob_h = self.decoder_encoder(*batch)
+        n_batch, n_nodes = node_h.shape[0], node_h.shape[1]
+        glob_node = glob_h[:, None, :].expand(n_batch, n_nodes, -1)
+        glob_pair = glob_h[:, None, None, :].expand(
+            n_batch, n_nodes, n_nodes, -1
+        )
+        u = self.node_score(torch.cat([node_h, glob_node], dim=-1)).squeeze(-1)
+        logits = self.edge_score(torch.cat([pair_h, glob_pair], dim=-1)).squeeze(
+            -1
+        )
+        return u, logits
 
     def tool_log_probs(
         self, obs: tfeat.Observation, legal: np.ndarray
     ) -> torch.Tensor:
         """
-        Compute log-probabilities of every candidate, -inf when illegal.
+        Compute log-probabilities of every candidate for one state.
 
         :param obs: observation
         :param legal: boolean mask over `candidates(d)`
-        :return: log-probabilities, shape (n_candidates,)
+        :return: log-probabilities (n_candidates,), -inf when illegal
         """
-        dtype = next(self.parameters()).dtype
-        node_h, pair_h, glob_h = self.tool_encoder(
-            *obs_to_tensors(obs, dtype=dtype)
-        )
-        _, index = self.candidates(obs.node.shape[0])
-        logits = self.tool_head(node_h, pair_h, glob_h, index)
-        legal_t = torch.as_tensor(legal, dtype=torch.bool)
-        logits = logits.masked_fill(~legal_t, float("-inf"))
-        log_probs = torch.log_softmax(logits, dim=-1)
-        return log_probs
+        batch = stack_observations([obs], dtype=self.dtype)
+        log_probs, _ = self.tool_log_probs_batch(batch, legal[None])
+        return log_probs[0]
 
     def decoder_params(
         self, obs: tfeat.Observation
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Compute the order utilities and edge logits.
+        Compute the order utilities and edge logits for one state.
 
         :param obs: observation
         :return: `u` (d,) and `logits` (d, d)
         """
-        dtype = next(self.parameters()).dtype
-        node_h, pair_h, glob_h = self.decoder_encoder(
-            *obs_to_tensors(obs, dtype=dtype)
-        )
-        n_nodes = node_h.shape[0]
-        u = self.node_score(
-            torch.cat([node_h, glob_h.expand(n_nodes, -1)], dim=-1)
-        ).squeeze(-1)
-        logits = self.edge_score(
-            torch.cat([pair_h, glob_h.expand(n_nodes, n_nodes, -1)], dim=-1)
-        ).squeeze(-1)
-        return u, logits
+        batch = stack_observations([obs], dtype=self.dtype)
+        u, logits = self.decoder_params_batch(batch)
+        return u[0], logits[0]
 
 
 def legal_mask(
