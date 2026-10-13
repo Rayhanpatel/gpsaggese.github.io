@@ -401,3 +401,129 @@ class Test_TukeyEnv(hunitest.TestCase):
         empty: score -1.0, shd 6
         """
         self.assert_equal(actual, expected, dedent=True)
+
+
+# #############################################################################
+# Test_more_families
+# #############################################################################
+
+
+_MORE_CONFIGS: Dict[str, tenv.GraphConfig] = {
+    "mixed_node": tenv.GraphConfig(family="mixed_node"),
+    "nonlinear": tenv.GraphConfig(family="nonlinear", n_nodes=8, n_edges=10),
+    "iscm": tenv.GraphConfig(family="iscm"),
+    "pgmpy_lg": tenv.GraphConfig(family="pgmpy_lg"),
+    "sklearn_reg": tenv.GraphConfig(family="sklearn_reg", n_nodes=7, n_edges=3),
+    "sklearn_confounder": tenv.GraphConfig(
+        family="sklearn_confounder", n_nodes=6, n_edges=2, confounder="observed"
+    ),
+    "scale_free": tenv.GraphConfig(n_nodes=8, n_edges=12, topology="scale_free"),
+    "chain": tenv.GraphConfig(n_nodes=8, n_edges=7, topology="chain"),
+    "star": tenv.GraphConfig(n_nodes=8, n_edges=7, topology="star"),
+    "layered": tenv.GraphConfig(n_nodes=9, n_edges=12, topology="layered"),
+}
+
+
+class Test_more_families(hunitest.TestCase):
+    """
+    Contracts and family-specific checks of the M1 families and topologies.
+    """
+
+    def test1(self) -> None:
+        """
+        Every family: acyclic, exact edge count, standardized, finite; targets.
+        """
+        lines = []
+        for name, cfg in _MORE_CONFIGS.items():
+            targets: collections.Counter = collections.Counter()
+            for seed in range(20):
+                inst = tenv.sample_instance(cfg, seed)
+                B = inst.truth.B
+                x_train = inst.d_train.to_numpy()
+                self.assertTrue(tscore.is_dag(B))
+                self.assertEqual(int(B.sum()), cfg.n_edges)
+                self.assertTrue(np.isfinite(x_train).all())
+                self.assertLess(np.abs(x_train.std(axis=0) - 1).max(), 1e-12)
+                if inst.mechanism == "linear":
+                    noise_var = inst.noise_std**2
+                    cov = tenv.population_covariance(inst.W, noise_var)
+                    share = (noise_var / np.diag(cov)).min()
+                    self.assertGreaterEqual(share, 0.1 - 1e-9)
+                targets[inst.truth.target_class] += 1
+            lines.append(f"{name}: {dict(sorted(targets.items()))}")
+        actual = "\n".join(lines)
+        expected = """
+        mixed_node: {'dag': 3, 'ngdag_pattern': 17}
+        nonlinear: {'dag': 20}
+        iscm: {'cpdag': 5, 'dag': 15}
+        pgmpy_lg: {'cpdag': 20}
+        sklearn_reg: {'cpdag': 20}
+        sklearn_confounder: {'cpdag': 20}
+        scale_free: {'cpdag': 4, 'dag': 16}
+        chain: {'cpdag': 5, 'dag': 15}
+        star: {'cpdag': 5, 'dag': 15}
+        layered: {'cpdag': 6, 'dag': 14}
+        """
+        self.assert_equal(actual, expected, dedent=True)
+
+    def test2(self) -> None:
+        """
+        Quadratic mechanism: a symmetric parent is uncorrelated with its child.
+        """
+        cfg = tenv.GraphConfig(
+            family="nonlinear", n_nodes=2, n_edges=1, standardize="none"
+        )
+        found = 0
+        for seed in range(200):
+            inst = tenv.sample_instance(cfg, seed)
+            symmetric = inst.noise_families[0] in ("gaussian", "uniform")
+            if inst.mechanism != "quadratic" or not symmetric:
+                continue
+            (parent,), (child,) = np.nonzero(inst.truth.B)
+            x = inst.d_train.to_numpy()
+            linear = abs(np.corrcoef(x[:, parent], x[:, child])[0, 1])
+            squared = abs(np.corrcoef(x[:, parent] ** 2, x[:, child])[0, 1])
+            self.assertLess(linear, 0.1)
+            self.assertGreater(squared, 0.2)
+            found += 1
+        self.assertGreater(found, 10)
+
+    def test3(self) -> None:
+        """
+        iSCM: every variable has unit variance before any post-processing.
+        """
+        cfg = tenv.GraphConfig(
+            family="iscm", n_nodes=8, n_edges=12, standardize="none"
+        )
+        for seed in range(10):
+            x = tenv.sample_instance(cfg, seed).d_train.to_numpy()
+            self.assertLess(np.abs(x.var(axis=0) - 1).max(), 0.15)
+
+    def test4(self) -> None:
+        """
+        Observed common cause: T1 and T2 are dependent, independent given U.
+        """
+        cfg = _MORE_CONFIGS["sklearn_confounder"]
+        for seed in range(10):
+            inst = tenv.sample_instance(cfg, seed)
+            (source,) = np.flatnonzero(inst.truth.B.sum(axis=1))
+            t_1, t_2 = np.flatnonzero(inst.truth.B[source])
+            cache = ttools.ToolCache(inst.d_train.to_numpy())
+            marginal = cache.fisher_z(cache.corr[t_1, t_2], 0)[1]
+            given_u = cache.run(ttools.ci_test_action(t_1, t_2, (source,)))
+            self.assertLess(marginal, 1e-6)
+            self.assertGreater(given_u["p"], 0.001)
+
+    def test5(self) -> None:
+        """
+        Topologies: chain is a path, star has a hub, layers are short.
+        """
+        for seed in range(10):
+            B = tenv.sample_instance(_MORE_CONFIGS["chain"], seed).truth.B
+            self.assertEqual(sorted(B.sum(axis=0).tolist()), [0] + [1] * 7)
+            self.assertEqual(sorted(B.sum(axis=1).tolist()), [0] + [1] * 7)
+            B = tenv.sample_instance(_MORE_CONFIGS["star"], seed).truth.B
+            self.assertEqual(int(B.sum(axis=1).max()), 7)
+            B = tenv.sample_instance(_MORE_CONFIGS["layered"], seed).truth.B
+            # 9 nodes in 3 layers: no directed path longer than 2 edges.
+            self.assertEqual(int(np.linalg.matrix_power(B, 3).sum()), 0)

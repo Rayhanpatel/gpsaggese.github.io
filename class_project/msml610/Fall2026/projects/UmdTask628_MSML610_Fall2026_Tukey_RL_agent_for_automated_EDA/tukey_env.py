@@ -15,6 +15,18 @@ Families in this module:
 - `linear_gauss_eqvar_raw`: Gaussian noise with equal variances on the raw
   scale, where the DAG is identifiable (Peters and Buhlmann 2014)
 - `mixed`: one of the three noise families drawn per graph
+- `mixed_node`: a noise family drawn per node (target: the ngDAG pattern of
+  Hoyer et al. 2008 when Gaussian and non-Gaussian nodes mix)
+- `nonlinear`: additive noise, one mechanism per graph (`tanh(3z)` or the
+  bounded quadratic `clip(z^2, 0, 9)` of the standardized parent)
+- `iscm`: linear SEM standardized inside the model (Ormaniec et al. 2025)
+- `pgmpy_lg`: pgmpy's random linear-Gaussian Bayesian network (the spec's
+  named generator), kept as pgmpy draws it and filtered by rejection
+- `sklearn_reg`: scikit-learn `make_regression`, informative features -> y
+- `sklearn_confounder`: `make_regression` with two targets sharing one
+  informative feature (an observed common cause)
+- Topologies (`GraphConfig.topology`): Erdos-Renyi by edge count (default),
+  scale-free hubs, chain, star and layered graphs
 
 Contracts of the linear families (checked in `test/test_tukey_env.py`):
 - every node's noise explains at least 10% of its variance: incoming weights
@@ -40,6 +52,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+import pgmpy.models as pgmodel
+import sklearn.datasets as skdata
 
 import helpers.hdbg as hdbg
 import research.agentic_data_science.RL_for_auto_EDA_prototype as rlproto
@@ -56,12 +70,29 @@ _FAMILY_NOISE = {
     "linear_gauss_eqvar_raw": "gaussian",
 }
 _MIXED_NOISES = ("exponential", "uniform", "gaussian")
-FAMILIES = ("proto", "mixed") + tuple(_FAMILY_NOISE)
+_NONLINEAR_MECHANISMS = ("tanh", "quadratic")
+FAMILIES = (
+    ("proto", "mixed")
+    + tuple(_FAMILY_NOISE)
+    + (
+        "mixed_node",
+        "nonlinear",
+        "iscm",
+        "pgmpy_lg",
+        "sklearn_reg",
+        "sklearn_confounder",
+    )
+)
+TOPOLOGIES = ("er", "scale_free", "chain", "star", "layered")
 
 # Noise-share floor and edge-strength margin of the linear families.
 _MIN_NOISE_SHARE = 0.1
 _MIN_EDGE_PCORR = 0.1
 _MAX_TRIES = 500
+# Nonlinear family: per-edge signal share floor, linearity ceiling, pilot size.
+_MIN_EDGE_SIGNAL_SHARE = 0.05
+_MAX_LINEAR_R2 = 0.9
+_N_PILOT = 20_000
 
 
 # #############################################################################
@@ -90,6 +121,10 @@ class GraphConfig:
     # Number of rows, split into train and test.
     n_samples: int = 3000
     test_frac: float = 0.33
+    # Graph shape, one of `TOPOLOGIES`.
+    topology: str = "er"
+    # `sklearn_confounder` only: "observed" common cause.
+    confounder: str = "none"
 
 
 # The prototype's setting: 6 nodes, 6 edges, exponential noise, raw scale.
@@ -125,6 +160,8 @@ class Instance:
     target_reason: str
     # Number of weight draws rejected by the edge-strength margin.
     n_rejected: int
+    # Edge mechanism: "linear", or the nonlinear family's "tanh"/"quadratic".
+    mechanism: str = "linear"
 
 
 # #############################################################################
@@ -177,6 +214,70 @@ def _sample_er_dag(
     for idx in rng.choice(len(pairs), size=n_edges, replace=False):
         i, j = pairs[idx]
         B[i, j] = 1
+    return B
+
+
+def _sample_topology(
+    rng: np.random.Generator, topology: str, n_nodes: int, n_edges: int
+) -> np.ndarray:
+    """
+    Sample a DAG of a non-ER shape along a random order.
+
+    :param rng: random generator
+    :param topology: "scale_free", "chain", "star" or "layered"
+    :param n_nodes: number of nodes
+    :param n_edges: number of edges (`n_nodes - 1` for chain and star)
+    :return: DAG adjacency
+    """
+    order = rng.permutation(n_nodes)
+    B = np.zeros((n_nodes, n_nodes), dtype=int)
+    if topology in ("chain", "star"):
+        hdbg.dassert_eq(n_edges, n_nodes - 1, "%s has d - 1 edges", topology)
+        for k in range(1, n_nodes):
+            parent = order[k - 1] if topology == "chain" else order[0]
+            B[parent, order[k]] = 1
+        return B
+    if topology == "layered":
+        n_layers = max(2, int(round(np.sqrt(n_nodes))))
+        layer = np.array_split(order, n_layers)
+        pairs = [
+            (int(i), int(j))
+            for upper, lower in zip(layer[:-1], layer[1:])
+            for i in upper
+            for j in lower
+        ]
+        probs = None
+    elif topology == "scale_free":
+        pairs = [
+            (order[i], order[j])
+            for i, j in itertools.combinations(range(n_nodes), 2)
+        ]
+        # Heavy-tailed parent weights make a few nodes hubs.
+        hub_weight = rng.pareto(1.5, size=n_nodes) + 1.0
+        probs = np.array([hub_weight[i] for i, _ in pairs])
+        probs = probs / probs.sum()
+    else:
+        raise ValueError(f"Unknown topology '{topology}'")
+    hdbg.dassert_lte(n_edges, len(pairs), "Too many edges for %s", topology)
+    for idx in rng.choice(len(pairs), size=n_edges, replace=False, p=probs):
+        i, j = pairs[idx]
+        B[i, j] = 1
+    return B
+
+
+def _sample_dag(rng: np.random.Generator, cfg: GraphConfig) -> np.ndarray:
+    """
+    Sample the hidden DAG with the configured topology.
+
+    :param rng: random generator
+    :param cfg: generator settings
+    :return: DAG adjacency
+    """
+    hdbg.dassert_in(cfg.topology, TOPOLOGIES)
+    if cfg.topology == "er":
+        B = _sample_er_dag(rng, cfg.n_nodes, cfg.n_edges)
+    else:
+        B = _sample_topology(rng, cfg.topology, cfg.n_nodes, cfg.n_edges)
     return B
 
 
@@ -463,12 +564,16 @@ def _sample_linear(cfg: GraphConfig, seed: int) -> Dict[str, Any]:
     rng_graph, rng_weights, rng_noise, rng_split, rng_perm = [
         np.random.default_rng(s) for s in np.random.SeedSequence(seed).spawn(5)
     ]
-    B = _sample_er_dag(rng_graph, cfg.n_nodes, cfg.n_edges)
-    if cfg.family == "mixed":
-        family = _MIXED_NOISES[rng_graph.integers(len(_MIXED_NOISES))]
+    B = _sample_dag(rng_graph, cfg)
+    if cfg.family == "mixed_node":
+        draws = rng_graph.integers(len(_MIXED_NOISES), size=cfg.n_nodes)
+        families = tuple(_MIXED_NOISES[k] for k in draws)
     else:
-        family = _FAMILY_NOISE[cfg.family]
-    families = (family,) * cfg.n_nodes
+        if cfg.family == "mixed":
+            family = _MIXED_NOISES[rng_graph.integers(len(_MIXED_NOISES))]
+        else:
+            family = _FAMILY_NOISE[cfg.family]
+        families = (family,) * cfg.n_nodes
     # Draw weights and noise scales, cap the signal shares and redraw until
     # every edge passes the margin.
     n_rejected = 0
@@ -504,6 +609,461 @@ def _sample_linear(cfg: GraphConfig, seed: int) -> Dict[str, Any]:
     return sample
 
 
+def _permuted_sample(
+    x: np.ndarray,
+    W: np.ndarray,
+    noise_std: np.ndarray,
+    families: Tuple[str, ...],
+    cfg: GraphConfig,
+    rng_perm: np.random.Generator,
+    rng_split: np.random.Generator,
+) -> Dict[str, Any]:
+    """
+    Permute the columns, split the rows and package an instance's fields.
+
+    :param x: data in generation order
+    :param W: weighted adjacency in generation order
+    :param noise_std: noise standard deviation per node
+    :param families: noise family per node
+    :param cfg: generator settings
+    :param rng_perm: random generator of the column permutation
+    :param rng_split: random generator of the row split
+    :return: fields of `Instance` (without the target)
+    """
+    perm = rng_perm.permutation(cfg.n_nodes)
+    x_train, x_test = _split_and_scale(x[:, perm], cfg, rng_split)
+    sample = {
+        "W": W[np.ix_(perm, perm)],
+        "x_train": x_train,
+        "x_test": x_test,
+        "noise_std": noise_std[perm],
+        "noise_families": tuple(families[k] for k in perm),
+    }
+    return sample
+
+
+def _mechanism(name: str, z: np.ndarray) -> np.ndarray:
+    """
+    Apply a nonlinear mechanism to a standardized parent.
+
+    :param name: "tanh" or "quadratic"
+    :param z: standardized parent values
+    :return: `tanh(3 z)` or `clip(z^2, 0, 9)`
+    """
+    if name == "tanh":
+        return np.tanh(3.0 * z)
+    hdbg.dassert_eq(name, "quadratic")
+    return np.clip(z**2, 0.0, 9.0)
+
+
+def _simulate_nonlinear(
+    rng: np.random.Generator,
+    W: np.ndarray,
+    families: Tuple[str, ...],
+    noise_std: np.ndarray,
+    mechanism: str,
+    center: np.ndarray,
+    scale: np.ndarray,
+    n_samples: int,
+) -> np.ndarray:
+    """
+    Sample `x_j = sum_i W_ij f((x_i - center_i) / scale_i) + e_j`.
+
+    :param rng: random generator
+    :param W: weighted adjacency
+    :param families: noise family per node
+    :param noise_std: noise standard deviation per node
+    :param mechanism: nonlinear mechanism
+    :param center: standardization constants of each node (from a pilot)
+    :param scale: standardization constants of each node (from a pilot)
+    :param n_samples: number of rows
+    :return: data
+    """
+    n_nodes = W.shape[0]
+    x = np.zeros((n_samples, n_nodes))
+    for j in _topological_order((W != 0).astype(int)):
+        noise = _sample_noise(rng, families[j], n_samples, noise_std[j])
+        signal = np.zeros(n_samples)
+        for i in np.flatnonzero(W[:, j]):
+            z = (x[:, i] - center[i]) / scale[i]
+            signal += W[i, j] * _mechanism(mechanism, z)
+        x[:, j] = signal + noise
+    return x
+
+
+def _calibrate_nonlinear(
+    rng: np.random.Generator,
+    W: np.ndarray,
+    families: Tuple[str, ...],
+    noise_std: np.ndarray,
+    mechanism: str,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, bool]:
+    """
+    Fix the standardization constants on a pilot sample and check each edge.
+
+    Nodes are processed in topological order on a 20,000-row pilot: a node's
+    incoming weights are scaled down if its noise would explain less than 10%
+    of its variance; each edge must carry at least 5% of the child's variance;
+    and with `tanh` each edge's mechanism must be visibly nonlinear (linear
+    R^2 of `f(z)` on `z` at most 0.9).
+
+    :param rng: random generator of the pilot
+    :param W: weighted adjacency
+    :param families: noise family per node
+    :param noise_std: noise standard deviation per node
+    :param mechanism: nonlinear mechanism
+    :return: capped weights, centers, scales, and whether every edge passes
+    """
+    W = W.copy()
+    n_nodes = W.shape[0]
+    x = np.zeros((_N_PILOT, n_nodes))
+    center = np.zeros(n_nodes)
+    scale = np.ones(n_nodes)
+    passes = True
+    for j in _topological_order((W != 0).astype(int)):
+        noise = _sample_noise(rng, families[j], _N_PILOT, noise_std[j])
+        parents = np.flatnonzero(W[:, j])
+        terms = {}
+        for i in parents:
+            z = (x[:, i] - center[i]) / scale[i]
+            f_z = _mechanism(mechanism, z)
+            if mechanism == "tanh":
+                passes &= np.corrcoef(z, f_z)[0, 1] ** 2 <= _MAX_LINEAR_R2
+            terms[i] = f_z
+        signal = (
+            sum(W[i, j] * terms[i] for i in parents) if len(parents) else 0.0
+        )
+        signal_var = float(np.var(signal)) if len(parents) else 0.0
+        max_signal_var = (
+            noise_std[j] ** 2 * (1 - _MIN_NOISE_SHARE) / _MIN_NOISE_SHARE
+        )
+        if signal_var > max_signal_var:
+            W[:, j] *= np.sqrt(max_signal_var / signal_var)
+            signal = sum(W[i, j] * terms[i] for i in parents)
+        x[:, j] = signal + noise
+        center[j] = x[:, j].mean()
+        scale[j] = x[:, j].std()
+        for i in parents:
+            share = np.var(W[i, j] * terms[i]) / scale[j] ** 2
+            passes &= share >= _MIN_EDGE_SIGNAL_SHARE
+    return W, center, scale, bool(passes)
+
+
+def _random_weights(
+    rng: np.random.Generator, B: np.ndarray, cfg: GraphConfig
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Draw signed edge weights and noise scales as the linear families do.
+
+    :param rng: random generator
+    :param B: DAG adjacency
+    :param cfg: generator settings
+    :return: weights and noise standard deviations
+    """
+    signs = rng.choice([-1.0, 1.0], size=B.shape)
+    W = B * signs * rng.uniform(*cfg.w_range, size=B.shape)
+    if cfg.noise_scale == "equal":
+        noise_std = np.ones(cfg.n_nodes)
+    else:
+        noise_std = rng.uniform(0.5, 1.5, size=cfg.n_nodes)
+    return W, noise_std
+
+
+def _sample_nonlinear(cfg: GraphConfig, seed: int) -> Dict[str, Any]:
+    """
+    Sample an additive-noise model with one nonlinear mechanism per graph.
+
+    :param cfg: generator settings
+    :param seed: instance seed
+    :return: fields of `Instance` besides `cfg`, `seed`, data and `truth`
+    """
+    rng_graph, rng_weights, rng_noise, rng_split, rng_perm, rng_pilot = [
+        np.random.default_rng(s) for s in np.random.SeedSequence(seed).spawn(6)
+    ]
+    B = _sample_dag(rng_graph, cfg)
+    family = _MIXED_NOISES[rng_graph.integers(len(_MIXED_NOISES))]
+    mechanism = _NONLINEAR_MECHANISMS[rng_graph.integers(2)]
+    families = (family,) * cfg.n_nodes
+    n_rejected = 0
+    for _ in range(_MAX_TRIES):
+        W, noise_std = _random_weights(rng_weights, B, cfg)
+        W, center, scale, passes = _calibrate_nonlinear(
+            rng_pilot, W, families, noise_std, mechanism
+        )
+        if passes:
+            break
+        n_rejected += 1
+    else:
+        raise RuntimeError(f"No nonlinear weights passed in {_MAX_TRIES} tries")
+    x = _simulate_nonlinear(
+        rng_noise,
+        W,
+        families,
+        noise_std,
+        mechanism,
+        center,
+        scale,
+        cfg.n_samples,
+    )
+    sample = _permuted_sample(
+        x, W, noise_std, families, cfg, rng_perm, rng_split
+    )
+    sample["target_class"] = tscore.TARGET_DAG
+    sample["target_reason"] = "nonlinear additive noise (Hoyer et al. 2009)"
+    sample["n_rejected"] = n_rejected
+    sample["mechanism"] = mechanism
+    return sample
+
+
+def _sample_iscm(cfg: GraphConfig, seed: int) -> Dict[str, Any]:
+    """
+    Sample a linear SEM standardized inside the model (iSCM).
+
+    Each variable is divided by its exact population standard deviation as
+    soon as it is generated, so every variable has unit variance and weights
+    act on standardized parents (Ormaniec et al., ICLR 2025). The result is a
+    linear SEM with effective weights `W_ij / sd_j` and noise `e_j / sd_j`.
+
+    :param cfg: generator settings
+    :param seed: instance seed
+    :return: fields of `Instance` besides `cfg`, `seed`, data and `truth`
+    """
+    rng_graph, rng_weights, rng_noise, rng_split, rng_perm = [
+        np.random.default_rng(s) for s in np.random.SeedSequence(seed).spawn(5)
+    ]
+    B = _sample_dag(rng_graph, cfg)
+    family = _MIXED_NOISES[rng_graph.integers(len(_MIXED_NOISES))]
+    families = (family,) * cfg.n_nodes
+    n_rejected = 0
+    max_ratio = (1 - _MIN_NOISE_SHARE) / _MIN_NOISE_SHARE
+    for _ in range(_MAX_TRIES):
+        W, noise_std = _random_weights(rng_weights, B, cfg)
+        # Standardize in topological order (parents already have unit
+        # variance), capping each node's signal share on the standardized
+        # parents so that its noise explains at least 10% of its variance.
+        W_eff = np.zeros_like(W)
+        noise_eff = np.zeros(cfg.n_nodes)
+        corr = np.zeros((cfg.n_nodes, cfg.n_nodes))
+        for j in _topological_order(B):
+            weights = W[:, j].copy()
+            signal_var = weights @ corr @ weights
+            if signal_var > noise_std[j] ** 2 * max_ratio:
+                weights *= np.sqrt(noise_std[j] ** 2 * max_ratio / signal_var)
+                signal_var = weights @ corr @ weights
+            sd_j = np.sqrt(signal_var + noise_std[j] ** 2)
+            W_eff[:, j] = weights / sd_j
+            noise_eff[j] = noise_std[j] / sd_j
+            corr[:, j] = corr @ W_eff[:, j]
+            corr[j, :] = corr[:, j]
+            corr[j, j] = 1.0
+        if passes_edge_margin(W_eff, noise_eff**2):
+            break
+        n_rejected += 1
+    else:
+        raise RuntimeError(f"No iSCM weights passed in {_MAX_TRIES} tries")
+    x = _simulate_linear(rng_noise, W_eff, families, noise_eff, cfg.n_samples)
+    sample = _permuted_sample(
+        x, W_eff, noise_eff, families, cfg, rng_perm, rng_split
+    )
+    target_class, target_reason = _target_for_linear(families, cfg)
+    sample["target_class"] = target_class
+    sample["target_reason"] = "iSCM: " + target_reason
+    sample["n_rejected"] = n_rejected
+    return sample
+
+
+def _sample_pgmpy(cfg: GraphConfig, seed: int) -> Dict[str, Any]:
+    """
+    Sample pgmpy's random linear-Gaussian Bayesian network, filtered.
+
+    pgmpy draws intercepts and weights from N(0, 1) and noise deviations of
+    any size; networks with no edge, a node whose noise explains less than 10%
+    of its variance, or an edge below the margin are redrawn (never modified).
+
+    :param cfg: generator settings
+    :param seed: instance seed
+    :return: fields of `Instance` besides `cfg`, `seed`, data and `truth`
+    """
+    rng_graph, rng_split, rng_perm = [
+        np.random.default_rng(s) for s in np.random.SeedSequence(seed).spawn(3)
+    ]
+    n_nodes = cfg.n_nodes
+    names = [f"X_{k}" for k in range(n_nodes)]
+    n_rejected = 0
+    for _ in range(_MAX_TRIES):
+        model = pgmodel.LinearGaussianBayesianNetwork.get_random(
+            n_nodes=n_nodes,
+            n_edges=cfg.n_edges,
+            loc=0.0,
+            scale=1.0,
+            seed=int(rng_graph.integers(2**31)),
+        )
+        W = np.zeros((n_nodes, n_nodes))
+        noise_std = np.zeros(n_nodes)
+        for cpd in model.get_cpds():
+            j = names.index(cpd.variable)
+            noise_std[j] = float(cpd.std)
+            for parent, beta in zip(cpd.evidence, cpd.beta[1:]):
+                W[names.index(parent), j] = beta
+        noise_var = noise_std**2
+        cov = population_covariance(W, noise_var)
+        passes = (
+            np.count_nonzero(W) > 0
+            and np.all(noise_var / np.diag(cov) >= _MIN_NOISE_SHARE)
+            and passes_edge_margin(W, noise_var)
+        )
+        if passes:
+            break
+        n_rejected += 1
+    else:
+        raise RuntimeError(f"No pgmpy network passed in {_MAX_TRIES} tries")
+    data = model.simulate(
+        n_samples=cfg.n_samples, seed=int(rng_graph.integers(2**31))
+    )
+    x = data[names].to_numpy()
+    families = ("gaussian",) * n_nodes
+    sample = _permuted_sample(
+        x, W, noise_std, families, cfg, rng_perm, rng_split
+    )
+    sample["target_class"] = tscore.TARGET_CPDAG
+    sample["target_reason"] = "pgmpy linear Gaussian: equivalence class only"
+    sample["n_rejected"] = n_rejected
+    return sample
+
+
+def _add_noise_for_r2(
+    rng: np.random.Generator, y: np.ndarray, coef: np.ndarray
+) -> Tuple[np.ndarray, float]:
+    """
+    Add Gaussian noise so that the target's population R^2 is U(0.3, 0.8).
+
+    The features of `make_regression` are independent standard normals, so
+    the signal variance is `sum(coef^2)`.
+
+    :param rng: random generator
+    :param y: noiseless target
+    :param coef: coefficients of the target
+    :return: noisy target and the noise standard deviation
+    """
+    r2 = rng.uniform(0.3, 0.8)
+    signal_var = float(np.sum(coef**2))
+    noise_sd = np.sqrt(signal_var * (1 - r2) / r2)
+    return y + noise_sd * rng.normal(size=y.shape[0]), noise_sd
+
+
+def _sample_sklearn_reg(cfg: GraphConfig, seed: int) -> Dict[str, Any]:
+    """
+    Sample `make_regression`: `n_edges` informative features cause y.
+
+    There are `n_nodes - 1` features; y is a collider of its informative
+    features, so all its edges are compelled (CPDAG = DAG).
+
+    :param cfg: generator settings
+    :param seed: instance seed
+    :return: fields of `Instance` besides `cfg`, `seed`, data and `truth`
+    """
+    n_features = cfg.n_nodes - 1
+    hdbg.dassert_lte(2, cfg.n_edges)
+    hdbg.dassert_lte(cfg.n_edges, n_features)
+    rng_graph, rng_noise, rng_split, rng_perm = [
+        np.random.default_rng(s) for s in np.random.SeedSequence(seed).spawn(4)
+    ]
+    n_rejected = 0
+    for _ in range(_MAX_TRIES):
+        features, y, coef = skdata.make_regression(
+            n_samples=cfg.n_samples,
+            n_features=n_features,
+            n_informative=cfg.n_edges,
+            noise=0.0,
+            shuffle=True,
+            coef=True,
+            random_state=int(rng_graph.integers(2**31)),
+        )
+        y, noise_sd = _add_noise_for_r2(rng_noise, y, coef)
+        W = np.zeros((cfg.n_nodes, cfg.n_nodes))
+        W[:n_features, n_features] = coef
+        noise_std = np.ones(cfg.n_nodes)
+        noise_std[n_features] = noise_sd
+        if passes_edge_margin(W, noise_std**2):
+            break
+        n_rejected += 1
+    else:
+        raise RuntimeError(
+            f"No make_regression draw passed in {_MAX_TRIES} tries"
+        )
+    x = np.column_stack([features, y])
+    families = ("gaussian",) * cfg.n_nodes
+    sample = _permuted_sample(
+        x, W, noise_std, families, cfg, rng_perm, rng_split
+    )
+    sample["target_class"] = tscore.TARGET_CPDAG
+    sample["target_reason"] = "make_regression: y is a collider (CPDAG = DAG)"
+    sample["n_rejected"] = n_rejected
+    return sample
+
+
+def _sample_sklearn_confounder(cfg: GraphConfig, seed: int) -> Dict[str, Any]:
+    """
+    Sample two targets driven by one observed informative feature U.
+
+    `make_regression` with `n_targets=2` and `n_informative=1`: U -> T1 and
+    U -> T2, no T1-T2 edge; the other `n_nodes - 3` features are isolated.
+    Each target's R^2 on U is drawn from U(0.3, 0.8). With U observed a CI test
+    given U separates T1 and T2 (the spec's Key Example 2).
+
+    :param cfg: generator settings
+    :param seed: instance seed
+    :return: fields of `Instance` besides `cfg`, `seed`, data and `truth`
+    """
+    hdbg.dassert_eq(cfg.confounder, "observed", "Only an observed U for now")
+    hdbg.dassert_eq(cfg.n_edges, 2, "U -> T1 and U -> T2")
+    n_features = cfg.n_nodes - 2
+    hdbg.dassert_lte(1, n_features)
+    rng_graph, rng_noise, rng_split, rng_perm = [
+        np.random.default_rng(s) for s in np.random.SeedSequence(seed).spawn(4)
+    ]
+    features, targets, coef = skdata.make_regression(
+        n_samples=cfg.n_samples,
+        n_features=n_features,
+        n_informative=1,
+        n_targets=2,
+        noise=0.0,
+        shuffle=True,
+        coef=True,
+        random_state=int(rng_graph.integers(2**31)),
+    )
+    source = int(np.flatnonzero(coef[:, 0])[0])
+    W = np.zeros((cfg.n_nodes, cfg.n_nodes))
+    noise_std = np.ones(cfg.n_nodes)
+    columns = [features]
+    for t in range(2):
+        target, noise_sd = _add_noise_for_r2(
+            rng_noise, targets[:, t], coef[:, t]
+        )
+        columns.append(target[:, None])
+        W[source, n_features + t] = coef[source, t]
+        noise_std[n_features + t] = noise_sd
+    x = np.column_stack(columns)
+    families = ("gaussian",) * cfg.n_nodes
+    sample = _permuted_sample(
+        x, W, noise_std, families, cfg, rng_perm, rng_split
+    )
+    sample["target_class"] = tscore.TARGET_CPDAG
+    sample["target_reason"] = "observed common cause (fork): CPDAG"
+    sample["n_rejected"] = 0
+    return sample
+
+
+_SAMPLERS = {
+    "proto": _sample_proto,
+    "nonlinear": _sample_nonlinear,
+    "iscm": _sample_iscm,
+    "pgmpy_lg": _sample_pgmpy,
+    "sklearn_reg": _sample_sklearn_reg,
+    "sklearn_confounder": _sample_sklearn_confounder,
+}
+
+
 def sample_instance(cfg: GraphConfig, seed: int) -> Instance:
     """
     Sample a hidden graph, its data and the train/test split.
@@ -513,10 +1073,8 @@ def sample_instance(cfg: GraphConfig, seed: int) -> Instance:
     :return: the instance
     """
     hdbg.dassert_in(cfg.family, FAMILIES)
-    if cfg.family == "proto":
-        sample = _sample_proto(cfg, seed)
-    else:
-        sample = _sample_linear(cfg, seed)
+    sampler = _SAMPLERS.get(cfg.family, _sample_linear)
+    sample = sampler(cfg, seed)
     B = (sample["W"] != 0).astype(int)
     nongauss = np.array([f != "gaussian" for f in sample["noise_families"]])
     truth = tscore.make_truth(
@@ -534,6 +1092,7 @@ def sample_instance(cfg: GraphConfig, seed: int) -> Instance:
         noise_families=sample["noise_families"],
         target_reason=sample["target_reason"],
         n_rejected=sample["n_rejected"],
+        mechanism=sample.get("mechanism", "linear"),
     )
     return instance
 
