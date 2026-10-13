@@ -15,7 +15,8 @@ outputs carry provenance).
 > tukey_eval.py b_match --manifest_dir configs/sets --out configs/b_match.json
 
 - Apply the learning-signal criteria of gate G7 to a training run:
-> tukey_eval.py g7_report --run_dir out --null_run_dir out_null --out g7.json
+> tukey_eval.py g7_report --bc_run_dir bc --rl_run_dir rl --null_run_dir null \
+    --out g7.json
 """
 
 import argparse
@@ -143,7 +144,9 @@ def _read_evals(run_dir: str) -> Dict[str, Dict[str, Any]]:
     return evals
 
 
-def _g7_report(run_dir: str, null_run_dir: str, out: str) -> Dict[str, Any]:
+def _g7_report(
+    bc_run_dir: str, rl_run_dir: str, null_run_dir: str, out: str
+) -> Dict[str, Any]:
     """
     Apply the spike's learning-signal criteria (gate G7) on validation graphs.
 
@@ -151,42 +154,38 @@ def _g7_report(run_dir: str, null_run_dir: str, out: str) -> Dict[str, Any]:
     within +0.3 of the teacher at the same budget; decoder RL improves the
     validation score over the BC decoder (paired 95% CI above 0); tool RL does
     not lower it by more than 0.1; decoder RL with a null reward does not
-    improve it (CI not above 0).
+    improve it (CI not above 0). All runs evaluate the same validation graphs.
 
-    :param run_dir: run with phases A, B, C
-    :param null_run_dir: null-reward run started from the same BC checkpoint
+    :param bc_run_dir: behaviour-cloning run (phase A)
+    :param rl_run_dir: run with phases B then C started from the BC checkpoint
+        (its "start" evaluation is the BC policy)
+    :param null_run_dir: null-reward phase-B run from the same checkpoint
     :param out: output JSON path
     :return: report
     """
-    evals = _read_evals(run_dir)
-    score = {
-        tag: np.array(r["per_graph_score"])
-        for tag, r in evals.items()
-        if "per_graph_score" in r
-    }
-    shd = {
-        tag: np.array(r["per_graph_shd"])
-        for tag, r in evals.items()
-        if "per_graph_shd" in r
-    }
+    bc = _read_evals(bc_run_dir)
+    rl = _read_evals(rl_run_dir)
+
+    def _scores(evals: Dict[str, Dict[str, Any]], tag: str) -> np.ndarray:
+        return np.array(evals[tag]["per_graph_score"])
+
     report: Dict[str, Any] = {}
-    accuracy = evals["bc_after_A"]["accuracy"]
+    accuracy = bc["bc_after_A"]["accuracy"]
     report["bc_accuracy"] = {"value": accuracy, "pass": accuracy >= 0.9}
     shd_gap = float(
-        shd["after_A"].mean() - shd["expert_strength_matched_budget"].mean()
+        np.mean(bc["after_A"]["per_graph_shd"])
+        - np.mean(bc["expert_strength_matched_budget"]["per_graph_shd"])
     )
     report["bc_shd_gap"] = {"value": shd_gap, "pass": shd_gap <= 0.3}
-    dec = _paired_bootstrap(score["after_B"] - score["after_A"])
+    dec = _paired_bootstrap(_scores(rl, "after_B") - _scores(rl, "start"))
     report["decoder_rl_gain"] = {**dec, "pass": dec["ci_low"] > 0}
-    tool = _paired_bootstrap(score["after_C"] - score["after_B"])
+    tool = _paired_bootstrap(_scores(rl, "after_C") - _scores(rl, "after_B"))
     report["tool_rl_change"] = {**tool, "pass": tool["mean"] >= -0.1}
-    if null_run_dir:
-        null_evals = _read_evals(null_run_dir)
-        null_diff = np.array(
-            null_evals["after_B"]["per_graph_score"]
-        ) - np.array(null_evals["start"]["per_graph_score"])
-        null = _paired_bootstrap(null_diff)
-        report["null_reward_change"] = {**null, "pass": null["ci_low"] <= 0}
+    null_evals = _read_evals(null_run_dir)
+    null = _paired_bootstrap(
+        _scores(null_evals, "after_B") - _scores(null_evals, "start")
+    )
+    report["null_reward_change"] = {**null, "pass": null["ci_low"] <= 0}
     report["all_pass"] = all(
         v["pass"] for v in report.values() if isinstance(v, dict)
     )
@@ -213,7 +212,13 @@ def _parse() -> argparse.ArgumentParser:
         help="What to do",
     )
     parser.add_argument(
-        "--run_dir", action="store", default="", help="Training run output"
+        "--bc_run_dir", action="store", default="", help="BC run output"
+    )
+    parser.add_argument(
+        "--rl_run_dir",
+        action="store",
+        default="",
+        help="Decoder and tool RL run output",
     )
     parser.add_argument(
         "--null_run_dir",
@@ -251,7 +256,7 @@ def _main(parser: argparse.ArgumentParser) -> None:
         _measure_b_match(args.manifest_dir, args.out)
     elif args.action == "g7_report":
         hdbg.dassert_ne(args.out, "", "Pass --out")
-        _g7_report(args.run_dir, args.null_run_dir, args.out)
+        _g7_report(args.bc_run_dir, args.rl_run_dir, args.null_run_dir, args.out)
     else:
         raise ValueError(f"Unknown action '{args.action}'")
 
