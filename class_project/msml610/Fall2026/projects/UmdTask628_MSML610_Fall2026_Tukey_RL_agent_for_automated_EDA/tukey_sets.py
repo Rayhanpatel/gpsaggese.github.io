@@ -147,11 +147,67 @@ TASKS: Dict[str, Callable[[int], tenv.GraphConfig]] = {
         ),
     ),
     "main_pgmpy": functools.partial(main_task_config, family="pgmpy_lg"),
+    "main_mixed_node": functools.partial(main_task_config, family="mixed_node"),
+    "main_nonlinear": functools.partial(main_task_config, family="nonlinear"),
+    "main_iscm": functools.partial(main_task_config, family="iscm"),
+    # 7 features, 4 of them informative, and y.
+    "sklearn_reg_8_4": functools.partial(
+        _constant_config,
+        cfg=tenv.GraphConfig(n_nodes=8, n_edges=4, family="sklearn_reg"),
+    ),
 }
 for _n_nodes in (4, 5, 6, 7, 8, 9, 10, 12, 15):
     TASKS[f"size_{_n_nodes}"] = functools.partial(
         fixed_size_config, n_nodes=_n_nodes
     )
+
+
+def _scale_free_config(seed: int) -> tenv.GraphConfig:
+    """
+    Settings for scale-free graphs with 8 nodes and 1-1.5 edges per node.
+
+    :param seed: instance seed
+    :return: generator settings
+    """
+    cfg = dataclasses.replace(
+        fixed_size_config(seed, n_nodes=8), topology="scale_free"
+    )
+    return cfg
+
+
+def _raw_config(seed: int, *, task: str) -> tenv.GraphConfig:
+    """
+    Settings of a task with the data kept on its raw scale.
+
+    :param seed: instance seed
+    :param task: key of `TASKS`
+    :return: generator settings with `standardize="none"`
+    """
+    cfg = dataclasses.replace(TASKS[task](seed), standardize="none")
+    return cfg
+
+
+TASKS["scale_free_8"] = _scale_free_config
+# Generator families of the M1 sortability report, on the raw scale.
+SORTABILITY_TASKS = {
+    "proto": "proto",
+    "linear_exp": "main_linear_exp",
+    "linear_uniform": "main_linear_uniform",
+    "linear_gauss": "main_linear_gauss",
+    "eqvar_raw": "main_eqvar_raw",
+    "mixed": "main",
+    "mixed_node": "main_mixed_node",
+    "nonlinear": "main_nonlinear",
+    "iscm": "main_iscm",
+    "pgmpy_lg": "main_pgmpy",
+    "sklearn_reg": "sklearn_reg_8_4",
+    "sklearn_confounder": "confounder_observed_6",
+    "mixed_d10": "size_10",
+    "mixed_d15": "size_15",
+    "scale_free_d8": "scale_free_8",
+}
+for _task in SORTABILITY_TASKS.values():
+    TASKS[f"raw_{_task}"] = functools.partial(_raw_config, task=_task)
 
 
 # #############################################################################
@@ -233,6 +289,18 @@ def _make_sets() -> Dict[str, EvalSet]:
                 50_000_000 + n_nodes * 1_000_000,
                 200,
                 f"size_{n_nodes}",
+                False,
+            )
+        )
+    # M1 sortability report: 100 raw-scale graphs per family.
+    for k, (name, task) in enumerate(SORTABILITY_TASKS.items()):
+        sets.append(
+            EvalSet(
+                f"V_sort_{name}",
+                "validation",
+                90_000_000 + k * 100_000,
+                100,
+                f"raw_{task}",
                 False,
             )
         )

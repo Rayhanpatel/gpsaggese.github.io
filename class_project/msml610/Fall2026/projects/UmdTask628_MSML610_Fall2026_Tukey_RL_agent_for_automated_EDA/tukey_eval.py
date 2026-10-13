@@ -14,6 +14,9 @@ outputs carry provenance).
 - Measure the matched budget B_match(d) on the validation size sets:
 > tukey_eval.py b_match --manifest_dir configs/sets --out configs/b_match.json
 
+- Report var-, R2- and relatives-sortability per generator family (M1):
+> tukey_eval.py sortability --out results/m1/sortability.json
+
 - Break a BC policy's agreement with its teacher down by decision type:
 > tukey_eval.py bc_diagnostics --checkpoint out/policy_after_A.pt --out d.json
 
@@ -28,6 +31,7 @@ import logging
 import os
 from typing import Any, Dict, List
 
+import CausalDisco.baselines as cdbasel
 import numpy as np
 import torch
 
@@ -37,8 +41,10 @@ import tukey_env as tenv
 import tukey_features as tfeat
 import tukey_policy as tpolic
 import tukey_rollout as troll
+import tukey_scoring as tscore
 import tukey_scripted as tscrip
 import tukey_sets as tsets
+import tukey_sortability as tsortab
 import tukey_tools as ttools
 
 _LOG = logging.getLogger(__name__)
@@ -110,6 +116,94 @@ def _measure_b_match(manifest_dir: str, out: str) -> Dict[str, Any]:
         json.dump(stats, file, indent=1)
         file.write("\n")
     return stats
+
+
+def _shd_dag(B_hat: np.ndarray, B_true: np.ndarray) -> int:
+    """
+    Compute the structural Hamming distance between two DAGs.
+
+    :param B_hat: estimated DAG (nonzero entries are edges)
+    :param B_true: true DAG
+    :return: number of node pairs whose marks differ
+    """
+    shd = tscore.shd_marks(
+        tscore.marks_from_pdag((B_hat != 0).astype(int)),
+        tscore.marks_from_pdag(B_true),
+    )
+    return shd
+
+
+def _paired_bootstrap(
+    diff: np.ndarray, *, n_boot: int = 10_000, seed: int = 0
+) -> Dict[str, float]:
+    """
+    Compute the mean of paired differences with a percentile bootstrap CI.
+
+    :param diff: per-graph differences
+    :param n_boot: bootstrap resamples
+    :param seed: random seed
+    :return: mean and 95% interval
+    """
+    rng = np.random.default_rng(seed)
+    idx = rng.integers(len(diff), size=(n_boot, len(diff)))
+    means = diff[idx].mean(axis=1)
+    summary = {
+        "mean": float(diff.mean()),
+        "ci_low": float(np.percentile(means, 2.5)),
+        "ci_high": float(np.percentile(means, 97.5)),
+    }
+    return summary
+
+
+def _sortability_report(out: str) -> Dict[str, Any]:
+    """
+    Measure how far simple scores reveal the causal order, per family (M1).
+
+    For each `V_sort_*` set (100 raw-scale validation graphs per family) it
+    computes var-, R2- and relatives-sortability under the `paths` and `edges`
+    definitions on the raw training rows and on their standardized version,
+    and compares var-sort-regress with random-order regress on standardized
+    data (paired SHD differences with a bootstrap CI): on standardized data
+    sorting by variance should be no better than a random order.
+
+    :param out: output JSON path
+    :return: report per family
+    """
+    report: Dict[str, Any] = {}
+    for name in sorted(tsets.EVAL_SETS):
+        if not name.startswith("V_sort_"):
+            continue
+        eval_set = tsets.EVAL_SETS[name]
+        values: Dict[str, List[float]] = {}
+        shd_var, shd_random = [], []
+        for seed in eval_set.seeds:
+            inst = tenv.sample_instance(tsets.TASKS[eval_set.task](seed), seed)
+            x = inst.d_train.to_numpy()
+            z = (x - x.mean(axis=0)) / x.std(axis=0)
+            for scale, data in (("raw", x), ("std", z)):
+                for key, value in tsortab.sortabilities(data, inst.W).items():
+                    values.setdefault(f"{scale}_{key}", []).append(value)
+            B_true = inst.truth.B
+            shd_var.append(_shd_dag(cdbasel.var_sort_regress(z), B_true))
+            shd_random.append(
+                _shd_dag(cdbasel.random_sort_regress(z, seed=seed), B_true)
+            )
+        summary: Dict[str, Any] = {
+            key: {"mean": float(np.mean(v)), "sd": float(np.std(v))}
+            for key, v in sorted(values.items())
+        }
+        summary["n_graphs"] = len(eval_set.seeds)
+        summary["shd_var_sort_regress_std"] = float(np.mean(shd_var))
+        summary["shd_random_sort_regress_std"] = float(np.mean(shd_random))
+        summary["var_minus_random_shd"] = _paired_bootstrap(
+            np.array(shd_var, dtype=float) - np.array(shd_random, dtype=float)
+        )
+        report[name.removeprefix("V_sort_")] = summary
+        _LOG.info("%s: %s", name, summary)
+    with open(out, "w") as file:
+        json.dump(report, file, indent=1)
+        file.write("\n")
+    return report
 
 
 def _bc_diagnostics(
@@ -213,28 +307,6 @@ def _bc_diagnostics(
     return report
 
 
-def _paired_bootstrap(
-    diff: np.ndarray, *, n_boot: int = 10_000, seed: int = 0
-) -> Dict[str, float]:
-    """
-    Compute the mean of paired differences with a percentile bootstrap CI.
-
-    :param diff: per-graph differences
-    :param n_boot: bootstrap resamples
-    :param seed: random seed
-    :return: mean and 95% interval
-    """
-    rng = np.random.default_rng(seed)
-    idx = rng.integers(len(diff), size=(n_boot, len(diff)))
-    means = diff[idx].mean(axis=1)
-    summary = {
-        "mean": float(diff.mean()),
-        "ci_low": float(np.percentile(means, 2.5)),
-        "ci_high": float(np.percentile(means, 97.5)),
-    }
-    return summary
-
-
 def _read_evals(run_dir: str) -> Dict[str, Dict[str, Any]]:
     """
     Read the evaluation records of a training run by tag.
@@ -317,7 +389,13 @@ def _parse() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "action",
-        choices=["write_manifests", "b_match", "g7_report", "bc_diagnostics"],
+        choices=[
+            "write_manifests",
+            "b_match",
+            "g7_report",
+            "bc_diagnostics",
+            "sortability",
+        ],
         help="What to do",
     )
     parser.add_argument(
@@ -372,6 +450,9 @@ def _main(parser: argparse.ArgumentParser) -> None:
     elif args.action == "b_match":
         hdbg.dassert_ne(args.out, "", "Pass --out")
         _measure_b_match(args.manifest_dir, args.out)
+    elif args.action == "sortability":
+        hdbg.dassert_ne(args.out, "", "Pass --out")
+        _sortability_report(args.out)
     elif args.action == "bc_diagnostics":
         hdbg.dassert_ne(args.out, "", "Pass --out")
         _bc_diagnostics(
