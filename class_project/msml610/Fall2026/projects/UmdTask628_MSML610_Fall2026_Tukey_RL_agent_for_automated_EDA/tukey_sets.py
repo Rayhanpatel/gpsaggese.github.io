@@ -132,6 +132,21 @@ TASKS: Dict[str, Callable[[int], tenv.GraphConfig]] = {
         _constant_config,
         cfg=tenv.GraphConfig(n_nodes=12, n_edges=18, family="mixed"),
     ),
+    "nonlinear_8_10": functools.partial(
+        _constant_config,
+        cfg=tenv.GraphConfig(n_nodes=8, n_edges=10, family="nonlinear"),
+    ),
+    # U, T1, T2 and three unrelated features.
+    "confounder_observed_6": functools.partial(
+        _constant_config,
+        cfg=tenv.GraphConfig(
+            n_nodes=6,
+            n_edges=2,
+            family="sklearn_confounder",
+            confounder="observed",
+        ),
+    ),
+    "main_pgmpy": functools.partial(main_task_config, family="pgmpy_lg"),
 }
 for _n_nodes in (4, 5, 6, 7, 8, 9, 10, 12, 15):
     TASKS[f"size_{_n_nodes}"] = functools.partial(
@@ -191,6 +206,10 @@ def _make_sets() -> Dict[str, EvalSet]:
         ("C", "main_linear_uniform"),
         ("D", "main"),
         ("H", "mixed_12_18"),
+        # Added with the M1 families (manifests written before the M2 table).
+        ("E", "nonlinear_8_10"),
+        ("F", "confounder_observed_6"),
+        ("G", "main_pgmpy"),
     ]
     for k, (setting, task) in enumerate(m2_tasks):
         offset = k * 1_000_000
