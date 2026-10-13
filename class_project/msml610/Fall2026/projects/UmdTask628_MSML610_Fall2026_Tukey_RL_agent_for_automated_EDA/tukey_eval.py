@@ -14,6 +14,9 @@ outputs carry provenance).
 - Measure the matched budget B_match(d) on the validation size sets:
 > tukey_eval.py b_match --manifest_dir configs/sets --out configs/b_match.json
 
+- Break a BC policy's agreement with its teacher down by decision type:
+> tukey_eval.py bc_diagnostics --checkpoint out/policy_after_A.pt --out d.json
+
 - Apply the learning-signal criteria of gate G7 to a training run:
 > tukey_eval.py g7_report --bc_run_dir bc --rl_run_dir rl --null_run_dir null \
     --out g7.json
@@ -26,12 +29,17 @@ import os
 from typing import Any, Dict, List
 
 import numpy as np
+import torch
 
 import helpers.hdbg as hdbg
 import helpers.hparser as hparser
 import tukey_env as tenv
+import tukey_features as tfeat
+import tukey_policy as tpolic
+import tukey_rollout as troll
 import tukey_scripted as tscrip
 import tukey_sets as tsets
+import tukey_tools as ttools
 
 _LOG = logging.getLogger(__name__)
 
@@ -102,6 +110,107 @@ def _measure_b_match(manifest_dir: str, out: str) -> Dict[str, Any]:
         json.dump(stats, file, indent=1)
         file.write("\n")
     return stats
+
+
+def _bc_diagnostics(
+    checkpoint: str, manifest_dir: str, b_match_path: str, out: str
+) -> Dict[str, Any]:
+    """
+    Break the policy's next-action agreement with its teacher down by type.
+
+    Replays the teacher on the first 100 `V_main` graphs with the budgets of
+    `tukey_train.py`'s accuracy check and classifies each teacher decision:
+    `ci_start` (first CI test of a pair), `ci_continue` (another conditioning
+    variable for a pair already tested), `regress` (orientation) or `stop`.
+    For mistakes it records what the policy chose instead and, when both
+    choices are CI tests, how close they were on the teacher's own ordering
+    score (`|r|` of the pair, or `max(|r_ik|, |r_jk|)` of the conditioning
+    variable).
+
+    :param checkpoint: saved policy (`tukey_train.py`)
+    :param manifest_dir: directory of the manifests
+    :param b_match_path: matched budgets
+    :param out: output JSON path
+    :return: diagnostics
+    """
+    state = torch.load(checkpoint, weights_only=False)
+    hdbg.dassert_eq(state["feature_schema"], tfeat.schema_hash())
+    policy = tpolic.TukeyPolicy(hidden=state["config"]["hidden"])
+    policy.load_state_dict(state["state_dict"])
+    teacher = tscrip.ScriptedExpert(order=state["config"]["teacher_order"])
+    with open(b_match_path) as file:
+        b_match = {int(d): v["b_match"] for d, v in json.load(file).items()}
+    rng = np.random.default_rng(12345)
+    tasks = []
+    for seed, cfg, sha256 in tsets.load_set("V_main", manifest_dir)[:100]:
+        tsets.sample_checked(seed, cfg, sha256)
+        budget = int(round(rng.uniform() * b_match[cfg.n_nodes]))
+        tasks.append(troll.Task(cfg, seed, budget))
+    episodes = troll.run_expert_episodes(teacher, policy, tasks)
+    abs_r = tfeat.PAIR_FEATURES.index("abs_r")
+    ci_mask = tfeat.PAIR_FEATURES.index("ci_mask")
+    stats: Dict[str, Dict[str, Any]] = {}
+    for episode in episodes:
+        actions, _ = policy.candidates(episode.task.cfg.n_nodes)
+        for decision in episode.decisions:
+            with torch.no_grad():
+                log_probs = policy.tool_log_probs(decision.obs, decision.legal)
+            chosen = actions[int(torch.argmax(log_probs))]
+            target = actions[decision.action_index]
+            pair = decision.obs.pair
+            if target.kind == ttools.CI_TEST:
+                i, j = target.args[:2]
+                kind = "ci_continue" if pair[i, j, ci_mask] > 0 else "ci_start"
+            else:
+                kind = target.kind
+            entry = stats.setdefault(
+                kind, {"n": 0, "correct": 0, "chose": {}, "score_gaps": []}
+            )
+            entry["n"] += 1
+            if chosen == target:
+                entry["correct"] += 1
+                continue
+            if chosen.kind == ttools.CI_TEST and target.kind == ttools.CI_TEST:
+                same_pair = chosen.args[:2] == target.args[:2]
+                label = "ci_same_pair" if same_pair else "ci_other_pair"
+                if same_pair:
+                    i, j = target.args[:2]
+                    k_t, k_c = target.args[2:], chosen.args[2:]
+                    gap = max(
+                        pair[i, k_t[0], abs_r], pair[j, k_t[0], abs_r]
+                    ) - max(pair[i, k_c[0], abs_r], pair[j, k_c[0], abs_r])
+                else:
+                    gap = (
+                        pair[target.args[0], target.args[1], abs_r]
+                        - pair[chosen.args[0], chosen.args[1], abs_r]
+                    )
+                entry["score_gaps"].append(float(gap))
+            else:
+                label = chosen.kind
+            entry["chose"][label] = entry["chose"].get(label, 0) + 1
+    report: Dict[str, Any] = {}
+    for kind, entry in sorted(stats.items()):
+        gaps = np.abs(entry["score_gaps"])
+        report[kind] = {
+            "n": entry["n"],
+            "accuracy": round(entry["correct"] / entry["n"], 4),
+            "mistakes_chose": entry["chose"],
+            "median_abs_score_gap": float(np.median(gaps))
+            if len(gaps)
+            else None,
+            "frac_gap_below_0.02": float(np.mean(gaps < 0.02))
+            if len(gaps)
+            else None,
+        }
+    n_total = sum(e["n"] for e in stats.values())
+    report["overall_accuracy"] = round(
+        sum(e["correct"] for e in stats.values()) / n_total, 4
+    )
+    with open(out, "w") as file:
+        json.dump(report, file, indent=1)
+        file.write("\n")
+    _LOG.info("BC diagnostics: %s", report)
+    return report
 
 
 def _paired_bootstrap(
@@ -208,11 +317,20 @@ def _parse() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "action",
-        choices=["write_manifests", "b_match", "g7_report"],
+        choices=["write_manifests", "b_match", "g7_report", "bc_diagnostics"],
         help="What to do",
     )
     parser.add_argument(
         "--bc_run_dir", action="store", default="", help="BC run output"
+    )
+    parser.add_argument(
+        "--checkpoint", action="store", default="", help="Saved policy"
+    )
+    parser.add_argument(
+        "--b_match_path",
+        action="store",
+        default="configs/b_match.json",
+        help="Matched budgets",
     )
     parser.add_argument(
         "--rl_run_dir",
@@ -254,6 +372,11 @@ def _main(parser: argparse.ArgumentParser) -> None:
     elif args.action == "b_match":
         hdbg.dassert_ne(args.out, "", "Pass --out")
         _measure_b_match(args.manifest_dir, args.out)
+    elif args.action == "bc_diagnostics":
+        hdbg.dassert_ne(args.out, "", "Pass --out")
+        _bc_diagnostics(
+            args.checkpoint, args.manifest_dir, args.b_match_path, args.out
+        )
     elif args.action == "g7_report":
         hdbg.dassert_ne(args.out, "", "Pass --out")
         _g7_report(args.bc_run_dir, args.rl_run_dir, args.null_run_dir, args.out)
