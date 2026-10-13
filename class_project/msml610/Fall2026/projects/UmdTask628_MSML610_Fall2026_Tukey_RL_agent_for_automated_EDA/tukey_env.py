@@ -36,7 +36,7 @@ import tukey_env as tenv
 import dataclasses
 import itertools
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -637,6 +637,29 @@ class TukeyEnv:
         reward = -ttools.TOOL_COSTS[action.kind]
         truncated = self._evidence.budget_left == 0
         return self._evidence, reward, False, truncated, {}
+
+    def reward_oracle(self) -> Callable[[np.ndarray], float]:
+        """
+        Return a function that scores any DAG on the current instance.
+
+        For trainers only (it reads the hidden graph): reinforcement learning
+        scores many sampled graphs per state without ending the episode. Scores
+        are cost-free and cached per graph.
+
+        :return: function from a DAG adjacency to its combined score
+        """
+        hdbg.dassert_is_not(self._instance, None, "Call reset() first")
+        truth = self._instance.truth
+        cache: Dict[bytes, float] = {}
+
+        def _score(B: np.ndarray) -> float:
+            key = B.astype(np.int8).tobytes()
+            if key not in cache:
+                scores = tscore.score_graph(B, truth, legacy=False)
+                cache[key] = scores["score"]
+            return cache[key]
+
+        return _score
 
     def submit_graph(self, edges: List[Tuple[int, int]]) -> Dict[str, Any]:
         """
