@@ -29,7 +29,7 @@ import tukey_rl as trl
 
 import dataclasses
 import logging
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -38,6 +38,7 @@ import helpers.hdbg as hdbg
 import tukey_env as tenv
 import tukey_features as tfeat
 import tukey_policy as tpolic
+import tukey_rollout as troll
 import tukey_scripted as tscrip
 import tukey_tools as ttools
 
@@ -315,6 +316,44 @@ def tool_rollout(
     return rollout
 
 
+def tool_advantages(
+    rollouts: List[Rollout], *, cost: float, shaping: bool
+) -> List[List[float]]:
+    """
+    Compute the advantage of every decision of K rollouts on one instance.
+
+    With shaping: `Phi(s_T) - b(s_t) - c * calls_from_t`, where `b(s_t)` is
+    `rollout.phi[t]` (a sampled Phi or a learned value, never a function of
+    the action at t). Without shaping: the rollout's total return minus the
+    leave-one-out mean of the other rollouts' totals, for every decision.
+
+    :param rollouts: K rollouts on one instance
+    :param cost: training cost per tool call (c)
+    :param shaping: use the potential-based return
+    :return: advantages per rollout and decision
+    """
+    n_rollouts = len(rollouts)
+    advantages = []
+    if shaping:
+        for rollout in rollouts:
+            advantages.append(
+                [
+                    float(rollout.phi_final - rollout.phi[t] - cost * calls)
+                    for t, calls in enumerate(rollout.calls_from)
+                ]
+            )
+    else:
+        hdbg.dassert_lt(1, n_rollouts)
+        totals = np.array(
+            [r.sampled_reward - cost * r.n_calls for r in rollouts]
+        )
+        for k, rollout in enumerate(rollouts):
+            baseline = (totals.sum() - totals[k]) / (n_rollouts - 1)
+            advantage = float(totals[k] - baseline)
+            advantages.append([advantage] * len(rollout.calls_from))
+    return advantages
+
+
 def tool_reinforce_loss(
     rollouts: List[Rollout], *, cost: float, shaping: bool
 ) -> torch.Tensor:
@@ -329,29 +368,288 @@ def tool_reinforce_loss(
     :param shaping: use the potential-based return
     :return: loss (its gradient is minus an unbiased estimate of grad J)
     """
-    n_rollouts = len(rollouts)
-    terms = []
-    if shaping:
-        for rollout in rollouts:
-            for t, log_prob in enumerate(rollout.log_probs):
-                advantage = float(
-                    rollout.phi_final
-                    - rollout.phi[t]
-                    - cost * rollout.calls_from[t]
-                )
-                terms.append(-advantage * log_prob)
-    else:
-        hdbg.dassert_lt(1, n_rollouts)
-        totals = np.array(
-            [r.sampled_reward - cost * r.n_calls for r in rollouts]
-        )
-        for k, rollout in enumerate(rollouts):
-            baseline = (totals.sum() - totals[k]) / (n_rollouts - 1)
-            advantage = float(totals[k] - baseline)
-            for log_prob in rollout.log_probs:
-                terms.append(-advantage * log_prob)
+    advantages = tool_advantages(rollouts, cost=cost, shaping=shaping)
+    terms = [
+        -advantage * log_prob
+        for rollout, rollout_adv in zip(rollouts, advantages)
+        for log_prob, advantage in zip(rollout.log_probs, rollout_adv)
+    ]
     if not terms:
         # Every rollout stopped with no decision (budget 0).
         return torch.zeros((), requires_grad=False)
-    loss = torch.stack(terms).sum() / n_rollouts
+    loss = torch.stack(terms).sum() / len(rollouts)
     return loss
+
+
+# #############################################################################
+# Batched training steps (gradient accumulation in chunks)
+# #############################################################################
+
+# States per forward pass when recomputing with gradients.
+_CHUNK = 256
+
+
+def _chunks(positions: List[int], size: int) -> List[List[int]]:
+    """
+    Split positions into consecutive chunks.
+
+    :param positions: item positions
+    :param size: chunk size
+    :return: chunks
+    """
+    return [positions[k : k + size] for k in range(0, len(positions), size)]
+
+
+def accumulate_bc_tool(
+    policy: tpolic.TukeyPolicy,
+    decisions: List[troll.Decision],
+    *,
+    weight: float = 1.0,
+) -> Tuple[float, float]:
+    """
+    Backpropagate the mean negative log-likelihood of expert decisions.
+
+    :param policy: policy
+    :param decisions: expert decisions
+    :param weight: loss weight
+    :return: mean loss and next-action accuracy (argmax equals the expert)
+    """
+    n_total = len(decisions)
+    hdbg.dassert_lt(0, n_total)
+    total_nll = 0.0
+    n_correct = 0
+    groups = troll.group_by_nodes(decisions, lambda d: d.obs.node.shape[0])
+    for positions in groups.values():
+        for chunk in _chunks(positions, _CHUNK):
+            batch = tpolic.stack_observations(
+                [decisions[k].obs for k in chunk], dtype=policy.dtype
+            )
+            legal = np.stack([decisions[k].legal for k in chunk])
+            log_probs, _ = policy.tool_log_probs_batch(batch, legal)
+            target = torch.as_tensor([decisions[k].action_index for k in chunk])
+            nll = -log_probs[torch.arange(len(chunk)), target]
+            (weight * nll.sum() / n_total).backward()
+            total_nll += float(nll.detach().sum())
+            n_correct += int((log_probs.argmax(dim=-1) == target).sum())
+    return total_nll / n_total, n_correct / n_total
+
+
+def accumulate_bc_decoder(
+    policy: tpolic.TukeyPolicy,
+    finals: List[Tuple[tfeat.Observation, np.ndarray]],
+    *,
+    weight: float = 1.0,
+) -> float:
+    """
+    Backpropagate `-log p(G_expert, order)` averaged over final states.
+
+    :param policy: policy
+    :param finals: `(final observation, expert DAG)` pairs
+    :param weight: loss weight
+    :return: mean loss
+    """
+    n_total = len(finals)
+    total = 0.0
+    groups = troll.group_by_nodes(finals, lambda f: f[0].node.shape[0])
+    for positions in groups.values():
+        for chunk in _chunks(positions, _CHUNK):
+            batch = tpolic.stack_observations(
+                [finals[k][0] for k in chunk], dtype=policy.dtype
+            )
+            u, logits = policy.decoder_params_batch(batch)
+            u_np = u.detach().numpy()
+            orders = torch.as_tensor(
+                [
+                    [tpolic.topological_order(finals[k][1], u_np[row])]
+                    for row, k in enumerate(chunk)
+                ]
+            )
+            B = torch.as_tensor(np.stack([finals[k][1] for k in chunk]))[:, None]
+            nll = -tpolic.order_edge_log_prob(u, logits, orders, B)[:, 0]
+            (weight * nll.sum() / n_total).backward()
+            total += float(nll.detach().sum())
+    return total / n_total
+
+
+def accumulate_decoder_rloo(
+    policy: tpolic.TukeyPolicy,
+    states: List[Tuple[tfeat.Observation, Callable[[np.ndarray], float]]],
+    *,
+    n_samples: int,
+    generator: torch.Generator,
+    weight: float = 1.0,
+) -> float:
+    """
+    Backpropagate the decoder's RLOO loss averaged over states.
+
+    :param policy: policy
+    :param states: `(observation, exact score function)` pairs
+    :param n_samples: graphs per state (M)
+    :param generator: random generator
+    :param weight: loss weight
+    :return: mean score of the sampled graphs
+    """
+    n_total = len(states)
+    total_reward = 0.0
+    groups = troll.group_by_nodes(states, lambda s: s[0].node.shape[0])
+    for positions in groups.values():
+        for chunk in _chunks(positions, _CHUNK):
+            batch = tpolic.stack_observations(
+                [states[k][0] for k in chunk], dtype=policy.dtype
+            )
+            u, logits = policy.decoder_params_batch(batch)
+            orders, B = tpolic.sample_graphs(u, logits, n_samples, generator)
+            rewards = torch.as_tensor(
+                [
+                    [states[k][1](B[row, m].numpy()) for m in range(n_samples)]
+                    for row, k in enumerate(chunk)
+                ],
+                dtype=u.dtype,
+            )
+            log_probs = tpolic.order_edge_log_prob(u, logits, orders, B)
+            baseline = (rewards.sum(dim=1, keepdim=True) - rewards) / (
+                n_samples - 1
+            )
+            advantages = (rewards - baseline).detach()
+            loss = -(advantages * log_probs).mean(dim=1).sum() / n_total
+            (weight * loss).backward()
+            total_reward += float(rewards.mean(dim=1).sum())
+    return total_reward / n_total
+
+
+def terminal_phi(
+    decoder_policy: tpolic.TukeyPolicy,
+    episodes: List[troll.Episode],
+    *,
+    n_samples: int,
+    generator: torch.Generator,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Estimate Phi at each episode's final state with M decoder samples.
+
+    :param decoder_policy: policy whose decoder is frozen
+    :param episodes: episodes
+    :param n_samples: decoder samples (M)
+    :param generator: random generator
+    :return: mean sampled score and the first sample's score, per episode
+    """
+    phi = np.zeros(len(episodes))
+    first = np.zeros(len(episodes))
+    groups = troll.group_by_nodes(episodes, lambda e: e.task.cfg.n_nodes)
+    for positions in groups.values():
+        for chunk in _chunks(positions, _CHUNK):
+            batch = tpolic.stack_observations(
+                [episodes[k].final_obs for k in chunk],
+                dtype=decoder_policy.dtype,
+            )
+            with torch.no_grad():
+                u, logits = decoder_policy.decoder_params_batch(batch)
+            _, B = tpolic.sample_graphs(u, logits, n_samples, generator)
+            for row, k in enumerate(chunk):
+                scores = [
+                    episodes[k].score_fn(B[row, m].numpy())
+                    for m in range(n_samples)
+                ]
+                phi[k] = np.mean(scores)
+                first[k] = scores[0]
+    return phi, first
+
+
+def accumulate_tool_rl(
+    policy: tpolic.TukeyPolicy,
+    decoder_policy: tpolic.TukeyPolicy,
+    groups: List[List[troll.Episode]],
+    *,
+    cost: float,
+    shaping: bool,
+    n_phi_samples: int,
+    generator: torch.Generator,
+    entropy_coef: float = 0.0,
+    value_coef: float = 1.0,
+) -> Dict[str, float]:
+    """
+    Backpropagate the tool head's REINFORCE loss for K rollouts per instance.
+
+    Rollouts were played without gradients; log-probabilities are recomputed
+    here in chunks. With shaping the baseline of each decision is the value
+    head's prediction at play time (it does not depend on the action), and the
+    terminal value is the mean of M decoder samples. Advantages come from
+    `tool_advantages()`, the function the gradient checks verify.
+
+    :param policy: policy whose tool tower and value head learn
+    :param decoder_policy: policy whose decoder is frozen
+    :param groups: K episodes per instance
+    :param cost: training cost per tool call (c)
+    :param shaping: use the potential-based return
+    :param n_phi_samples: decoder samples per terminal estimate (M)
+    :param generator: random generator
+    :param entropy_coef: weight of the entropy bonus
+    :param value_coef: weight of the value-head regression
+    :return: statistics of the batch
+    """
+    episodes = [episode for group in groups for episode in group]
+    phi_final, first_score = terminal_phi(
+        decoder_policy, episodes, n_samples=n_phi_samples, generator=generator
+    )
+    # Advantages and value targets for every decision.
+    items = []
+    position = 0
+    for group in groups:
+        rollouts = []
+        for episode in group:
+            rollouts.append(
+                Rollout(
+                    log_probs=[],
+                    entropies=[],
+                    phi=[d.value for d in episode.decisions],
+                    phi_final=float(phi_final[position]),
+                    sampled_reward=float(first_score[position]),
+                    calls_from=episode.calls_from,
+                    n_calls=episode.n_calls,
+                )
+            )
+            position += 1
+        advantages = tool_advantages(rollouts, cost=cost, shaping=shaping)
+        for episode, rollout, adv in zip(group, rollouts, advantages):
+            for t, decision in enumerate(episode.decisions):
+                target = rollout.phi_final - cost * rollout.calls_from[t]
+                items.append((decision, adv[t], target, len(group)))
+    n_groups = len(groups)
+    n_items = max(1, len(items))
+    stats = {"policy_loss": 0.0, "entropy": 0.0, "value_loss": 0.0}
+    by_nodes = troll.group_by_nodes(items, lambda it: it[0].obs.node.shape[0])
+    for positions in by_nodes.values():
+        for chunk in _chunks(positions, _CHUNK):
+            batch = tpolic.stack_observations(
+                [items[k][0].obs for k in chunk], dtype=policy.dtype
+            )
+            legal = np.stack([items[k][0].legal for k in chunk])
+            log_probs, values = policy.tool_log_probs_batch(batch, legal)
+            target_idx = torch.as_tensor(
+                [items[k][0].action_index for k in chunk]
+            )
+            chosen = log_probs[torch.arange(len(chunk)), target_idx]
+            dtype = log_probs.dtype
+            adv = torch.as_tensor([items[k][1] for k in chunk], dtype=dtype)
+            k_rollouts = torch.as_tensor(
+                [items[k][3] for k in chunk], dtype=dtype
+            )
+            policy_loss = -(adv * chosen / k_rollouts).sum() / n_groups
+            probs = log_probs.exp()
+            entropy = -(probs * log_probs.masked_fill(probs == 0, 0.0)).sum(
+                dim=-1
+            )
+            targets = torch.as_tensor([items[k][2] for k in chunk], dtype=dtype)
+            value_loss = ((values - targets) ** 2).sum() / n_items
+            loss = (
+                policy_loss
+                - entropy_coef * entropy.sum() / n_items
+                + value_coef * value_loss
+            )
+            loss.backward()
+            stats["policy_loss"] += policy_loss.item()
+            stats["entropy"] += entropy.detach().sum().item() / n_items
+            stats["value_loss"] += value_loss.item()
+    stats["phi_final_mean"] = float(np.mean(phi_final))
+    stats["calls_mean"] = float(np.mean([e.n_calls for e in episodes]))
+    return stats

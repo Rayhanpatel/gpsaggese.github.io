@@ -296,6 +296,17 @@ class _Toy:
     Enumerable toy: 3 variables, budget 2, three allowed tools plus STOP.
     """
 
+    def _observe(
+        self, prefix: Tuple[ttools.Action, ...]
+    ) -> Tuple[tfeat.Observation, np.ndarray]:
+        """
+        Replay a prefix of tool calls.
+        """
+        evidence, _ = self.env.reset(seed=self.seed)
+        for action in prefix:
+            evidence, _, _, _, _ = self.env.step(action)
+        return tfeat.featurize(evidence), self.legal_fn(self.actions, evidence)
+
     def _make_decoder_informative(self, B_true: np.ndarray) -> None:
         """
         Train the decoder so its expected score depends on the state.
@@ -310,10 +321,12 @@ class _Toy:
         lingam = self.tools[1]
         empty = np.zeros_like(B_true)
         params = _decoder_params(self.policy)
-        # 60 small steps: informative but still stochastic (a deterministic
-        # decoder would make every RLOO estimate zero).
-        optimizer = torch.optim.Adam(params, lr=0.003)
-        for _ in range(60):
+        optimizer = torch.optim.Adam(params, lr=0.001)
+        scores_t = torch.as_tensor(self.scores)
+        # Small steps, stopping as soon as Phi varies enough across states, so
+        # the decoder stays stochastic (a deterministic decoder would make
+        # every RLOO estimate zero).
+        for _ in range(500):
             loss = sum(
                 trl.bc_decoder_loss(
                     self.policy,
@@ -325,17 +338,13 @@ class _Toy:
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-
-    def _observe(
-        self, prefix: Tuple[ttools.Action, ...]
-    ) -> Tuple[tfeat.Observation, np.ndarray]:
-        """
-        Replay a prefix of tool calls.
-        """
-        evidence, _ = self.env.reset(seed=self.seed)
-        for action in prefix:
-            evidence, _, _, _, _ = self.env.step(action)
-        return tfeat.featurize(evidence), self.legal_fn(self.actions, evidence)
+            with torch.no_grad():
+                phis = [
+                    float((self.decoder_log_probs(p).exp() * scores_t).sum())
+                    for p in self.prefixes
+                ]
+            if max(phis) - min(phis) > 0.3:
+                break
 
     def __init__(self) -> None:
         torch.manual_seed(20)
