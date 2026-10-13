@@ -60,6 +60,8 @@ class TrainConfig:
     seed: int = 0
     hidden: int = 64
     phases: str = "ABC"
+    # Processing order of the behaviour-cloning teacher (see `ScriptedExpert`).
+    teacher_order: str = "strength"
     # Phase A: behaviour cloning of the budgeted scripted expert.
     bc_iters: int = 60
     bc_graphs: int = 16
@@ -134,7 +136,7 @@ class _Trainer:
         self.rng = np.random.default_rng(cfg.seed)
         self.generator = torch.Generator().manual_seed(cfg.seed)
         self.policy = tpolic.TukeyPolicy(hidden=cfg.hidden)
-        self.expert = tscrip.ScriptedExpert()
+        self.expert = tscrip.ScriptedExpert(order=cfg.teacher_order)
         with open(cfg.b_match_path) as file:
             self.b_match = {
                 int(d): v["b_match"] for d, v in json.load(file).items()
@@ -190,16 +192,17 @@ class _Trainer:
         self.log(summary)
         return summary
 
-    def evaluate_expert(self) -> Dict[str, Any]:
+    def evaluate_expert(self, order: str) -> Dict[str, Any]:
         """
-        Score the scripted expert on the validation graphs at the same budget.
+        Score a scripted expert on the validation graphs at the same budget.
+
+        :param order: the expert's processing order
         """
-        results = troll.evaluate_expert(
-            self.expert, self.policy, self.eval_tasks
-        )
+        expert = tscrip.ScriptedExpert(order=order)
+        results = troll.evaluate_expert(expert, self.policy, self.eval_tasks)
         summary = {
             "event": "eval",
-            "tag": "expert_matched_budget",
+            "tag": f"expert_{order}_matched_budget",
             "score": float(np.mean([r["score"] for r in results])),
             "shd_target": float(np.mean([r["shd_target"] for r in results])),
             "calls": float(np.mean([r["calls_used"] for r in results])),
@@ -434,7 +437,8 @@ def _main(parser: argparse.ArgumentParser) -> None:
         checkpoint = torch.load(args.init_checkpoint, weights_only=False)
         hdbg.dassert_eq(checkpoint["feature_schema"], tfeat.schema_hash())
         trainer.policy.load_state_dict(checkpoint["state_dict"])
-    trainer.evaluate_expert()
+    trainer.evaluate_expert("index")
+    trainer.evaluate_expert("strength")
     trainer.evaluate("start")
     for phase in cfg.phases:
         start = time.time()
