@@ -1,7 +1,15 @@
 """
+Run the Tukey notebooks inside the project container.
+
+This test runs on the host: it starts its own container through
+`docker_cmd.sh`, so it is excluded from the in-container unit tests (the repo's
+`pytest.ini` ignores `test_docker_*.py`). Run it with:
+
+> pytest test/test_docker_tukey.py
+
 Import as:
 
-import class_project.project_template.test.test_docker_all as tptdal
+import test.test_docker_tukey as ttedotuk
 """
 
 import logging
@@ -20,7 +28,7 @@ _LOG = logging.getLogger(__name__)
 
 class Test_docker(hdoctest.DockerTestCase):
     """
-    Run all Docker tests for `class_project/project_template`.
+    Run the Tukey notebooks inside Docker.
     """
 
     _test_file = __file__
@@ -28,10 +36,10 @@ class Test_docker(hdoctest.DockerTestCase):
     @pytest.mark.slow
     def test1(self) -> None:
         """
-        Test that `template.example.ipynb` runs without error inside Docker.
+        Test that `tukey.example.ipynb` runs without error inside Docker.
         """
         # Prepare inputs.
-        notebook_name = "template.example.ipynb"
+        notebook_name = "tukey.example.ipynb"
         # Run test.
         self.run_notebook(
             notebook_name, use_docker_cmd=True, generate_html=False
@@ -40,10 +48,10 @@ class Test_docker(hdoctest.DockerTestCase):
     @pytest.mark.slow
     def test2(self) -> None:
         """
-        Test that `template.API.ipynb` runs without error inside Docker.
+        Test that `tukey.API.ipynb` runs without error inside Docker.
         """
         # Prepare inputs.
-        notebook_name = "template.API.ipynb"
+        notebook_name = "tukey.API.ipynb"
         # Run test.
         self.run_notebook(
             notebook_name, use_docker_cmd=True, generate_html=False

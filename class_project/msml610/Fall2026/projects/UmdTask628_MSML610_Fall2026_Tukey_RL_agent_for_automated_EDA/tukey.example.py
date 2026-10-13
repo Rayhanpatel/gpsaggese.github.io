@@ -14,130 +14,53 @@
 # ---
 
 # %% [markdown]
-# # Description
+# # Tukey: learning to explore data with verifiable rewards
 #
-# This notebook examines ...
-#
-# The name of this notebook should follow the format: `<tool>.example.ipynb` (e.g., `pycaret.example.ipynb` for a pycaret example).
-#
-# References:
-# - Add description of what the notebook does.
-# - Point to references, e.g. (tool.example.md)
-# - Add citations.
-# - Keep the notebook flow clear.
-# - Comments should be imperative and have a period at the end.
-# - Your code should be well commented.
-#
-# Guide: https://github.com/causify-ai/helpers/blob/master/docs/coding/all.jupyter_notebook.how_to_guide.md
-
-# %% [markdown]
-# ## Imports
+# - This notebook runs the project end to end: synthetic causal worlds with a
+#   known answer, a statistical toolbox with a scripted baseline, a policy
+#   trained by reinforcement learning to choose tools, and the tests of how far
+#   that policy generalizes, including real data
+# - The pedagogical arc:
+#   - Part 1: the synthetic environment and what its data leak (Milestone 1)
+#   - Part 2: the toolbox, the scripted agent and the baseline table
+#     (Milestone 2)
+#   - Part 3: the trained policy against the scripted baseline (Milestone 3)
+#   - Part 4: curriculum, generalization, failure modes and real data
+#     (Milestone 4)
 
 # %%
 # %load_ext autoreload
 # %autoreload 2
 
-# System libraries.
 import logging
 
-# Third-party libraries.
-# import numpy as np
-# import pandas as pd
-# import seaborn as sns
-# import matplotlib.pyplot as plt
-
 # %%
-# # To install additional packages, use:
-# import helpers.hmodule as hmodule
-# hmodule.install_module_if_not_present(
-#     ["pycaret"],
-#     use_activate=True,
-#     use_sudo=False,
-#     venv_path="/opt/venv",
-# )
-
-# %%
-# Use this for most notebooks.
-import helpers.hdbg as hdbg
 import helpers.hnotebook as hnotebook
-
-_LOG = logging.getLogger(__name__)
+import tukey_utils as utils
 
 # Initialize notebook configuration and logging.
-hdbg.init_logger(verbosity=logging.INFO)
 hnotebook.config_notebook()
+_LOG = logging.getLogger(__name__)
+utils.init_loggers(_LOG)
 
-# Convert `display` into `print()`.
+# Convert `display` into `print()` when running outside IPython.
 try:
     from IPython.display import display
 except ImportError:
     display = print  # type: ignore
 
+# %% [markdown]
+# # Part 1: The synthetic environment
 
 # %% [markdown]
-# ## Make the notebook flow clear
+# ## Cell 1.1: Pinned scientific stack
 #
-# Each notebook needs to follow a clear and logical flow, e.g:
-# - Load data
-# - Compute stats
-# - Clean data
-# - Compute stats
-# - Do analysis
-# - Show results
-
+# **Goal**
+# - Confirm the container runs the pinned versions the results were produced
+#   with
 
 # %%
-class Template:
-    """
-    Brief imperative description of what the class does in one line, if needed.
-    """
-
-    def __init__(self) -> None:
-        """
-        Initialize the Template class.
-        """
-        pass
-
-    def method1(self, arg1: int) -> None:
-        """
-        Brief imperative description of what the method does in one line.
-
-        You can elaborate more in the method docstring in this section, for e.g. explaining
-        the formula/algorithm. Every method/function should have a docstring, typehints and include the
-        parameters and return as follows:
-
-        :param arg1: description of arg1
-        :return: description of return
-        """
-        # Code blocks go here.
-        # Make sure to include comments to explain what the code is doing.
-        # No empty lines between code blocks.
-        pass
-
-
-def template_function(arg1: int) -> None:
-    """
-    Brief imperative description of what the function does in one line.
-
-    You can elaborate more in the function docstring in this section, for e.g. explaining
-    the formula/algorithm. Every function should have a docstring, typehints and include the
-    parameters and return as follows:
-
-    :param arg1: description of arg1
-    :return: description of return
-    """
-    # Code blocks go here.
-    # Make sure to include comments to explain what the code is doing.
-    # No empty lines between code blocks.
-    pass
-
-
-# %% [markdown]
-# ## The flow should be highlighted using headings in markdown
-# ```
-# # Level 1
-# ## Level 2
-# ### Level 3
-# ```
-
-# %%
+# Report the version of every package the project depends on.
+versions = utils.cell1_1_get_package_versions()
+display(versions)
+# Outcome: one row per package, matching `requirements.txt`.

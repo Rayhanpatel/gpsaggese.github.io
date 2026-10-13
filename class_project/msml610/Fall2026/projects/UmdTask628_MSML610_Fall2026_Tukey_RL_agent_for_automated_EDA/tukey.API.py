@@ -14,126 +14,79 @@
 # ---
 
 # %% [markdown]
-# # Description
+# # Tukey API
 #
-# This notebook examines ...
-#
-# The name of this notebook should follow the format: `<tool>.API.ipynb` (e.g., `pycaret.API.ipynb` for exploring the pycaret API).
-#
-# References:
-# - Add description of what the notebook does.
-# - Point to references, e.g. (tool.API.md)
-# - Add citations.
-# - Keep the notebook flow clear.
-# - Comments should be imperative and have a period at the end.
-# - Your code should be well commented.
-#
-# Guide: https://github.com/causify-ai/helpers/blob/master/docs/coding/all.jupyter_notebook.how_to_guide.md
-
-# %% [markdown]
-# ## Imports
+# - This notebook tours the Tukey API: a Gym-style environment that hides a
+#   random causal graph, statistical tools an agent can call on the training
+#   data, a verifiable score, and a policy trained to choose the tools
+# - The pedagogical arc:
+#   - Part 1: check the environment and the pinned scientific stack
+#   - Part 2: sample a hidden graph and score candidate graphs against it
+#   - Part 3: call the statistical tools and run the scripted agent
+#   - Part 4: run a trained policy and read its tool-call trace
 
 # %%
 # %load_ext autoreload
 # %autoreload 2
 
-# System libraries.
 import logging
 
-# Third-party libraries.
-# import numpy as np
-# import pandas as pd
-# import seaborn as sns
-# import matplotlib.pyplot as plt
-
 # %%
-# # To install additional packages, use:
-# import helpers.hmodule as hmodule
-# hmodule.install_module_if_not_present(
-#     ["pycaret"],
-#     use_activate=True,
-#     use_sudo=False,
-#     venv_path="/opt/venv",
-# )
-
-# %%
-# Use this for most notebooks.
-import helpers.hdbg as hdbg
+import helpers.hintrospection as hintros
 import helpers.hnotebook as hnotebook
-
-_LOG = logging.getLogger(__name__)
+import tukey_utils as utils
 
 # Initialize notebook configuration and logging.
-hdbg.init_logger(verbosity=logging.INFO)
 hnotebook.config_notebook()
+_LOG = logging.getLogger(__name__)
+utils.init_loggers(_LOG)
 
-# Convert `display` into `print()`.
+# Convert `display` into `print()` when running outside IPython.
 try:
     from IPython.display import display
 except ImportError:
     display = print  # type: ignore
 
 # %% [markdown]
-# ## Make the notebook flow clear
-# Each notebook needs to follow a clear and logical flow, e.g:
-# - Load data
-# - Compute stats
-# - Clean data
-# - Compute stats
-# - Do analysis
-# - Show results
-
-
-# %%
-class Template:
-    """
-    Brief imperative description of what the class does in one line, if needed.
-    """
-
-    def __init__(self) -> None:
-        """
-        Initialize the Template class.
-        """
-        pass
-
-    def method1(self, arg1: int) -> None:
-        """
-        Brief imperative description of what the method does in one line.
-
-        You can elaborate more in the method docstring in this section, for e.g. explaining
-        the formula/algorithm. Every method/function should have a docstring, typehints and include the
-        parameters and return as follows:
-
-        :param arg1: description of arg1
-        :return: description of return
-        """
-        # Code blocks go here.
-        # Make sure to include comments to explain what the code is doing.
-        # No empty lines between code blocks.
-        pass
-
-
-def template_function(arg1: int) -> None:
-    """
-    Brief imperative description of what the function does in one line.
-
-    You can elaborate more in the function docstring in this section, for e.g. explaining
-    the formula/algorithm. Every function should have a docstring, typehints and include the
-    parameters and return as follows:
-
-    :param arg1: description of arg1
-    :return: description of return
-    """
-    # Code blocks go here.
-    # Make sure to include comments to explain what the code is doing.
-    # No empty lines between code blocks.
-    pass
-
+# ## Library Overview
+#
+# - **What problem it solves**: learning which statistical test to run next on
+#   an unknown dataset, rewarded by how well the discovered graph matches the
+#   hidden graph that generated the data
+# - **Key abstraction**: an episode = sample a hidden graph and data, call
+#   tools on the training rows, emit a graph, receive a verifiable score
+# - **Mental model**:
+#
+# | Object | Description | Comments |
+# |--------|-------------|----------|
+# | `GraphConfig` | Generator settings | Family, size, noise, scaling |
+# | `TukeyEnv.reset()` | Samples a hidden graph and data | The graph stays private |
+# | `TukeyEnv.step()` | Runs one tool call or emits a graph | Emitting ends the episode |
+# | `score_graph()` | Verifiable score | Structure plus held-out prediction |
+#
+# - **Key classes**:
+#   - `TukeyEnv`: the environment
+#   - `TukeyPolicy`: the trained tool-choosing policy
 
 # %% [markdown]
-# ## The flow should be highlighted using headings in markdown
-# ```
-# # Level 1
-# ## Level 2
-# ### Level 3
-# ```
+# # Part 1: Environment check
+
+# %% [markdown]
+# ## Cell 1.1: Pinned scientific stack
+#
+# **Goal**
+# - Confirm the container runs the pinned versions the results were produced
+#   with
+
+# %%
+# Report the version of every package the project depends on.
+versions = utils.cell1_1_get_package_versions()
+display(versions)
+# Outcome: one row per package, matching `requirements.txt`.
+
+# %% [markdown]
+# **Implementation** `cell1_1_get_package_versions()`
+# - Reads each version from the installed distribution metadata
+
+# %%
+hintros.print_obj_info(utils.cell1_1_get_package_versions)
