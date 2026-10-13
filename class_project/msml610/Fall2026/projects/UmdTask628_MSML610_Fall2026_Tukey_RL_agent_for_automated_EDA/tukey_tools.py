@@ -216,7 +216,9 @@ class ToolCache:
             result[f"coef_{pred}"] = float(coef[k])
             result[f"t_{pred}"] = float(t_stats[k])
             result[f"p_{pred}"] = float(p_values[k])
-        result["resid_ad"] = float(scipy.stats.anderson(resid).statistic)
+        result["resid_ad"] = float(
+            scipy.stats.anderson(resid, method="interpolate").statistic
+        )
         if len(preds) == 1:
             dep = np.corrcoef(self._z[:, preds[0]], np.abs(resid))[0, 1]
             result["resid_dep"] = float(abs(dep))
