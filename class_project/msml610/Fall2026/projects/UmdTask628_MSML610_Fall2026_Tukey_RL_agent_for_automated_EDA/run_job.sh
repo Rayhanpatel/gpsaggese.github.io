@@ -46,7 +46,7 @@ source $DOCKER_NAME
 
 # Snapshot the committed source and write the initial provenance.
 export PYTHONPATH=$GIT_ROOT:$GIT_ROOT/helpers_root
-python3 tukey_runs.py prepare --run_id "$RUN_ID" $CONFIRMATORY_ARGS
+python3 tukey_runs.py prepare --run_id "$RUN_ID" $CONFIRMATORY_ARGS --command "$CMD"
 
 # Run the command in a container with a name unique to this job, and remove
 # that container (only it) if the script is interrupted.

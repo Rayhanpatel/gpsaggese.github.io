@@ -247,13 +247,16 @@ def _check_confirmatory(project_dir: str, freeze_name: str) -> None:
 # #############################################################################
 
 
-def _prepare(project_dir: str, run_id: str, confirmatory: str) -> None:
+def _prepare(
+    project_dir: str, run_id: str, confirmatory: str, command: str
+) -> None:
     """
     Create `runs/<run_id>/` with a source snapshot and the initial provenance.
 
     :param project_dir: project directory
     :param run_id: unique run name
     :param confirmatory: freeze name the run must match; "" for exploratory runs
+    :param command: the command the job runs inside the snapshot
     """
     run_dir = os.path.join(project_dir, "runs", run_id)
     hdbg.dassert(not os.path.exists(run_dir), "Run dir '%s' exists", run_dir)
@@ -284,6 +287,7 @@ def _prepare(project_dir: str, run_id: str, confirmatory: str) -> None:
     subprocess.run(["tar", "-x", "-C", src_dir], input=archive, check=True)
     provenance = {
         "run_id": run_id,
+        "command": command,
         "created_utc": _now_utc(),
         "confirmatory": confirmatory,
         "commit": git_state["commit"],
@@ -381,6 +385,12 @@ def _parse() -> argparse.ArgumentParser:
         "--freeze_name", action="store", default="", help="Freeze record name"
     )
     parser.add_argument(
+        "--command",
+        action="store",
+        default="",
+        help="Command the job runs (recorded in the provenance)",
+    )
+    parser.add_argument(
         "--files", action="store", nargs="*", default=[], help="Files to freeze"
     )
     parser.add_argument(
@@ -400,7 +410,7 @@ def _main(parser: argparse.ArgumentParser) -> None:
     if args.action in ("prepare", "finalize", "verify"):
         hdbg.dassert_ne(args.run_id, "", "--run_id is required")
     if args.action == "prepare":
-        _prepare(project_dir, args.run_id, args.confirmatory)
+        _prepare(project_dir, args.run_id, args.confirmatory, args.command)
     elif args.action == "finalize":
         _finalize(project_dir, args.run_id, args.exit_code)
     elif args.action == "verify":
