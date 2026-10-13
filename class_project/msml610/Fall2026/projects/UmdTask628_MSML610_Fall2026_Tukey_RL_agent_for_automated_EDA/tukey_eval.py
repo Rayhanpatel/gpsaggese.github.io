@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 """
-Write evaluation-set manifests and measure the matched tool budget.
+Write evaluation-set manifests, measure the matched tool budget, check gates.
 
 Runs inside the project's Docker image (normally through `run_job.sh`, so the
 outputs carry provenance).
@@ -13,6 +13,9 @@ outputs carry provenance).
 
 - Measure the matched budget B_match(d) on the validation size sets:
 > tukey_eval.py b_match --manifest_dir configs/sets --out configs/b_match.json
+
+- Apply the learning-signal criteria of gate G7 to a training run:
+> tukey_eval.py g7_report --run_dir out --null_run_dir out_null --out g7.json
 """
 
 import argparse
@@ -100,6 +103,100 @@ def _measure_b_match(manifest_dir: str, out: str) -> Dict[str, Any]:
     return stats
 
 
+def _paired_bootstrap(
+    diff: np.ndarray, *, n_boot: int = 10_000, seed: int = 0
+) -> Dict[str, float]:
+    """
+    Compute the mean of paired differences with a percentile bootstrap CI.
+
+    :param diff: per-graph differences
+    :param n_boot: bootstrap resamples
+    :param seed: random seed
+    :return: mean and 95% interval
+    """
+    rng = np.random.default_rng(seed)
+    idx = rng.integers(len(diff), size=(n_boot, len(diff)))
+    means = diff[idx].mean(axis=1)
+    summary = {
+        "mean": float(diff.mean()),
+        "ci_low": float(np.percentile(means, 2.5)),
+        "ci_high": float(np.percentile(means, 97.5)),
+    }
+    return summary
+
+
+def _read_evals(run_dir: str) -> Dict[str, Dict[str, Any]]:
+    """
+    Read the evaluation records of a training run by tag.
+
+    :param run_dir: output directory of `tukey_train.py`
+    :return: records by tag (`eval` and `eval_bc` events)
+    """
+    evals: Dict[str, Dict[str, Any]] = {}
+    with open(os.path.join(run_dir, "train_log.jsonl")) as file:
+        for line in file:
+            record = json.loads(line)
+            if record["event"] == "eval":
+                evals[record["tag"]] = record
+            elif record["event"] == "eval_bc":
+                evals["bc_" + record["tag"]] = record
+    return evals
+
+
+def _g7_report(run_dir: str, null_run_dir: str, out: str) -> Dict[str, Any]:
+    """
+    Apply the spike's learning-signal criteria (gate G7) on validation graphs.
+
+    Criteria (plan 5.1): BC next-action accuracy >= 0.9; BC closed-loop SHD
+    within +0.3 of the teacher at the same budget; decoder RL improves the
+    validation score over the BC decoder (paired 95% CI above 0); tool RL does
+    not lower it by more than 0.1; decoder RL with a null reward does not
+    improve it (CI not above 0).
+
+    :param run_dir: run with phases A, B, C
+    :param null_run_dir: null-reward run started from the same BC checkpoint
+    :param out: output JSON path
+    :return: report
+    """
+    evals = _read_evals(run_dir)
+    score = {
+        tag: np.array(r["per_graph_score"])
+        for tag, r in evals.items()
+        if "per_graph_score" in r
+    }
+    shd = {
+        tag: np.array(r["per_graph_shd"])
+        for tag, r in evals.items()
+        if "per_graph_shd" in r
+    }
+    report: Dict[str, Any] = {}
+    accuracy = evals["bc_after_A"]["accuracy"]
+    report["bc_accuracy"] = {"value": accuracy, "pass": accuracy >= 0.9}
+    shd_gap = float(
+        shd["after_A"].mean() - shd["expert_strength_matched_budget"].mean()
+    )
+    report["bc_shd_gap"] = {"value": shd_gap, "pass": shd_gap <= 0.3}
+    dec = _paired_bootstrap(score["after_B"] - score["after_A"])
+    report["decoder_rl_gain"] = {**dec, "pass": dec["ci_low"] > 0}
+    tool = _paired_bootstrap(score["after_C"] - score["after_B"])
+    report["tool_rl_change"] = {**tool, "pass": tool["mean"] >= -0.1}
+    if null_run_dir:
+        null_evals = _read_evals(null_run_dir)
+        null_diff = np.array(
+            null_evals["after_B"]["per_graph_score"]
+        ) - np.array(null_evals["start"]["per_graph_score"])
+        null = _paired_bootstrap(null_diff)
+        report["null_reward_change"] = {**null, "pass": null["ci_low"] <= 0}
+    report["all_pass"] = all(
+        v["pass"] for v in report.values() if isinstance(v, dict)
+    )
+    with open(out, "w") as file:
+        json.dump(report, file, indent=1)
+        file.write("\n")
+    _LOG.info("G7 report: %s", report)
+    return report
+
+
 # #############################################################################
 # CLI
 # #############################################################################
@@ -111,7 +208,18 @@ def _parse() -> argparse.ArgumentParser:
         formatter_class=hparser.CustomHelpFormatter,
     )
     parser.add_argument(
-        "action", choices=["write_manifests", "b_match"], help="What to do"
+        "action",
+        choices=["write_manifests", "b_match", "g7_report"],
+        help="What to do",
+    )
+    parser.add_argument(
+        "--run_dir", action="store", default="", help="Training run output"
+    )
+    parser.add_argument(
+        "--null_run_dir",
+        action="store",
+        default="",
+        help="Null-reward training run output",
     )
     parser.add_argument(
         "--manifest_dir",
@@ -141,6 +249,9 @@ def _main(parser: argparse.ArgumentParser) -> None:
     elif args.action == "b_match":
         hdbg.dassert_ne(args.out, "", "Pass --out")
         _measure_b_match(args.manifest_dir, args.out)
+    elif args.action == "g7_report":
+        hdbg.dassert_ne(args.out, "", "Pass --out")
+        _g7_report(args.run_dir, args.null_run_dir, args.out)
     else:
         raise ValueError(f"Unknown action '{args.action}'")
 

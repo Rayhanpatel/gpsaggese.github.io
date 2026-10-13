@@ -192,6 +192,29 @@ class _Trainer:
         self.log(summary)
         return summary
 
+    def evaluate_bc_accuracy(self, tag: str) -> Dict[str, Any]:
+        """
+        Measure next-action agreement with the teacher on validation graphs.
+
+        Budgets are drawn as in training (U[0, 1] x B_match(d)) from a fixed
+        generator, so every evaluation scores the same decisions.
+        """
+        rng = np.random.default_rng(12345)
+        tasks = []
+        for task in self.eval_tasks:
+            budget = rng.uniform() * self.b_match[task.cfg.n_nodes]
+            tasks.append(troll.Task(task.cfg, task.seed, int(round(budget))))
+        episodes = troll.run_expert_episodes(self.expert, self.policy, tasks)
+        decisions = [d for e in episodes for d in e.decisions]
+        summary = {
+            "event": "eval_bc",
+            "tag": tag,
+            "accuracy": round(trl.bc_accuracy(self.policy, decisions), 4),
+            "n_decisions": len(decisions),
+        }
+        self.log(summary)
+        return summary
+
     def evaluate_expert(self, order: str) -> Dict[str, Any]:
         """
         Score a scripted expert on the validation graphs at the same budget.
@@ -281,6 +304,7 @@ class _Trainer:
             )
             if cfg.eval_every and (it + 1) % cfg.eval_every == 0:
                 self.evaluate(f"A_{it + 1}")
+                self.evaluate_bc_accuracy(f"A_{it + 1}")
 
     def phase_b(self) -> None:
         """
@@ -452,6 +476,8 @@ def _main(parser: argparse.ArgumentParser) -> None:
         )
         trainer.save(f"policy_after_{phase}.pt")
         trainer.evaluate(f"after_{phase}")
+        if phase == "A":
+            trainer.evaluate_bc_accuracy("after_A")
     trainer.close()
 
 

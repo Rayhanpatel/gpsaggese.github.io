@@ -434,6 +434,33 @@ def accumulate_bc_tool(
     return total_nll / n_total, n_correct / n_total
 
 
+def bc_accuracy(
+    policy: tpolic.TukeyPolicy, decisions: List[troll.Decision]
+) -> float:
+    """
+    Measure how often the policy's most likely action is the expert's.
+
+    :param policy: policy
+    :param decisions: expert decisions
+    :return: fraction of decisions where the argmax equals the expert action
+    """
+    n_correct = 0
+    groups = troll.group_by_nodes(decisions, lambda d: d.obs.node.shape[0])
+    with torch.no_grad():
+        for positions in groups.values():
+            for chunk in _chunks(positions, _CHUNK):
+                batch = tpolic.stack_observations(
+                    [decisions[k].obs for k in chunk], dtype=policy.dtype
+                )
+                legal = np.stack([decisions[k].legal for k in chunk])
+                log_probs, _ = policy.tool_log_probs_batch(batch, legal)
+                target = torch.as_tensor(
+                    [decisions[k].action_index for k in chunk]
+                )
+                n_correct += int((log_probs.argmax(dim=-1) == target).sum())
+    return n_correct / max(1, len(decisions))
+
+
 def accumulate_bc_decoder(
     policy: tpolic.TukeyPolicy,
     finals: List[Tuple[tfeat.Observation, np.ndarray]],
