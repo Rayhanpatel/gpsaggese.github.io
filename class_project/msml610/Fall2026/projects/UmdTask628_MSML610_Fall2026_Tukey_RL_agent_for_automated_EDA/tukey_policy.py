@@ -310,7 +310,8 @@ def _candidate_index(
 
     :param actions: candidate actions (tool calls, then STOP)
     :param n_nodes: number of variables
-    :return: `pair_idx`, `node_idx` (index tensors) and their weights, `types`
+    :return: averaging matrices `pair`, `context` (n_candidates, d**2 + 1)
+        and `nodes` (3, n_candidates, d + 1), and candidate `types`
     """
     null_node = n_nodes
     null_pair = n_nodes * n_nodes
@@ -369,13 +370,27 @@ def _candidate_index(
             types[c] = _TYPE_INDEX["stop"]
         else:
             raise ValueError(f"Unknown action '{action.kind}'")
+    # Turn the (index, weight) lists into dense averaging matrices, so a slot's
+    # contribution is one matrix product with the projected embedding table.
+    rows = np.arange(n_cand)
+    pair_matrix = np.zeros((n_cand, null_pair + 1))
+    context_matrix = np.zeros((n_cand, null_pair + 1))
+    node_matrices = np.zeros((3, n_cand, null_node + 1))
+    for k in range(pair_idx.shape[1]):
+        np.add.at(pair_matrix, (rows, pair_idx[:, k]), pair_w[:, k])
+    for k in range(context_idx.shape[1]):
+        np.add.at(context_matrix, (rows, context_idx[:, k]), context_w[:, k])
+    for slot in range(3):
+        for k in range(node_idx.shape[2]):
+            np.add.at(
+                node_matrices[slot],
+                (rows, node_idx[:, slot, k]),
+                node_w[:, slot, k],
+            )
     index = {
-        "pair_idx": torch.as_tensor(pair_idx),
-        "pair_w": torch.as_tensor(pair_w),
-        "node_idx": torch.as_tensor(node_idx),
-        "node_w": torch.as_tensor(node_w),
-        "context_idx": torch.as_tensor(context_idx),
-        "context_w": torch.as_tensor(context_w),
+        "pair": torch.as_tensor(pair_matrix),
+        "context": torch.as_tensor(context_matrix),
+        "nodes": torch.as_tensor(node_matrices),
         "types": torch.as_tensor(types),
     }
     return index
@@ -426,18 +441,17 @@ class ToolHead(torch.nn.Module):
         pair_table = torch.cat(
             [pair_h.reshape(n_batch, n_nodes * n_nodes, hidden), zeros], dim=1
         )
-        pair_proj = self.proj_pair(pair_table)[:, index["pair_idx"]]
-        pair_w = index["pair_w"].to(dtype)[None, :, :, None]
-        hidden_sum = (pair_proj * pair_w).sum(dim=2)
-        context_proj = self.proj_context(pair_table)[:, index["context_idx"]]
-        context_w = index["context_w"].to(dtype)[None, :, :, None]
-        hidden_sum = hidden_sum + (context_proj * context_w).sum(dim=2)
-        node_w = index["node_w"].to(dtype)
+        # (n_candidates, rows) @ (B, rows, H) -> (B, n_candidates, H).
+        hidden_sum = torch.matmul(
+            index["pair"].to(dtype), self.proj_pair(pair_table)
+        )
+        hidden_sum = hidden_sum + torch.matmul(
+            index["context"].to(dtype), self.proj_context(pair_table)
+        )
         for slot, proj in enumerate(self.proj_nodes):
-            slot_proj = proj(node_table)[:, index["node_idx"][:, slot]]
-            hidden_sum = hidden_sum + (
-                slot_proj * node_w[None, :, slot, :, None]
-            ).sum(dim=2)
+            hidden_sum = hidden_sum + torch.matmul(
+                index["nodes"][slot].to(dtype), proj(node_table)
+            )
         hidden_sum = hidden_sum + self.proj_glob(glob_h)[:, None, :]
         hidden_sum = hidden_sum + self.type_embedding(index["types"])[None]
         logits = self.out(torch.relu(hidden_sum)).squeeze(-1)
