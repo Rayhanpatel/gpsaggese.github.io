@@ -33,6 +33,7 @@ from typing import Any, Dict, List
 
 import CausalDisco.baselines as cdbasel
 import numpy as np
+import scipy.stats
 import torch
 
 import helpers.hdbg as hdbg
@@ -163,8 +164,9 @@ def _sortability_report(out: str) -> Dict[str, Any]:
     computes var-, R2- and relatives-sortability under the `paths` and `edges`
     definitions on the raw training rows and on their standardized version,
     and compares var-sort-regress with random-order regress on standardized
-    data (paired SHD differences with a bootstrap CI): on standardized data
-    sorting by variance should be no better than a random order.
+    data (paired SHD differences: bootstrap CI, Wilcoxon signed-rank p-value,
+    Holm-adjusted across families): on standardized data sorting by variance
+    should be no better than a random order.
 
     :param out: output JSON path
     :return: report per family
@@ -195,11 +197,23 @@ def _sortability_report(out: str) -> Dict[str, Any]:
         summary["n_graphs"] = len(eval_set.seeds)
         summary["shd_var_sort_regress_std"] = float(np.mean(shd_var))
         summary["shd_random_sort_regress_std"] = float(np.mean(shd_random))
-        summary["var_minus_random_shd"] = _paired_bootstrap(
-            np.array(shd_var, dtype=float) - np.array(shd_random, dtype=float)
+        diff = np.array(shd_var, dtype=float) - np.array(shd_random, dtype=float)
+        summary["var_minus_random_shd"] = _paired_bootstrap(diff)
+        summary["var_minus_random_shd"]["wilcoxon_p"] = (
+            float(scipy.stats.wilcoxon(diff).pvalue) if np.any(diff) else 1.0
         )
         report[name.removeprefix("V_sort_")] = summary
         _LOG.info("%s: %s", name, summary)
+    # Holm adjustment across the families.
+    families = sorted(
+        report, key=lambda k: report[k]["var_minus_random_shd"]["wilcoxon_p"]
+    )
+    running = 0.0
+    for rank, family in enumerate(families):
+        test = report[family]["var_minus_random_shd"]
+        adjusted = min(1.0, (len(families) - rank) * test["wilcoxon_p"])
+        running = max(running, adjusted)
+        test["holm_p"] = running
     with open(out, "w") as file:
         json.dump(report, file, indent=1)
         file.write("\n")
